@@ -1,0 +1,13 @@
+{
+  "name": "autosoundhq-notion-site",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/generate.js",
+    "start": "npx http-server public -p 3000"
+  },
+  "dependencies": {
+    "@notionhq/client": "^2.2.14"
+  }
+}
