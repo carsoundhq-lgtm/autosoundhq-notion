@@ -1,0 +1,2 @@
+:root { --bg:#0b0c10; --ink:#e8eef2; --muted:#9fb3c8; --accent:#56ccf2; --card:#11141a; }
+*{box-sizing:border-box} body{margin:0;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--ink);}
