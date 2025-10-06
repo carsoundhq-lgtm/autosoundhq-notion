@@ -2,10 +2,10 @@ name: Notion to Static
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 9 * * *'  # daily 09:00 UTC
   push:
     branches: [ main ]
+  schedule:
+    - cron: '0 9 * * *'  # daily 09:00 UTC
 
 jobs:
   build:
@@ -13,12 +13,43 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show repo tree
+        run: |
+          pwd
+          ls -la
+          echo "----"
+          find . -maxdepth 4 -type f | sort
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      - name: Show package.json
+        run: cat package.json
+
       - name: Install deps
         run: npm ci || npm i
+
+      - name: Check env (no secrets shown)
+        run: |
+          for k in SITE_NAME SITE_URL SKIMLINKS_PUB_ID GA4_MEASUREMENT_ID AMAZON_TRACKING_ID NOTION_TOKEN NOTION_DB_ARTICLES NOTION_DB_PRODUCTS NOTION_DB_KEYWORDS; do
+            if [ -z "${!k}" ]; then echo "::error ::$k is MISSING"; else echo "$k=OK"; fi
+          done
+        env:
+          SITE_NAME: ${{ secrets.SITE_NAME }}
+          SITE_URL: ${{ secrets.SITE_URL }}
+          SKIMLINKS_PUB_ID: ${{ secrets.SKIMLINKS_PUB_ID }}
+          GA4_MEASUREMENT_ID: ${{ secrets.GA4_MEASUREMENT_ID }}
+          AMAZON_TRACKING_ID: ${{ secrets.AMAZON_TRACKING_ID }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DB_ARTICLES: ${{ secrets.NOTION_DB_ARTICLES }}
+          NOTION_DB_PRODUCTS: ${{ secrets.NOTION_DB_PRODUCTS }}
+          NOTION_DB_KEYWORDS: ${{ secrets.NOTION_DB_KEYWORDS }}
+
       - name: Build static site from Notion
         env:
           SITE_NAME: ${{ secrets.SITE_NAME }}
@@ -30,7 +61,11 @@ jobs:
           NOTION_DB_ARTICLES: ${{ secrets.NOTION_DB_ARTICLES }}
           NOTION_DB_PRODUCTS: ${{ secrets.NOTION_DB_PRODUCTS }}
           NOTION_DB_KEYWORDS: ${{ secrets.NOTION_DB_KEYWORDS }}
-        run: npm run build
+        run: |
+          node -v
+          npm -v
+          npm run build
+
       - name: Commit generated files
         run: |
           git config user.name "github-actions[bot]"
