@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://autosoundhq.vercel.app/sitemap.xml
