@@ -1,286 +1,208 @@
-// scripts/generate.js
-// Notion → static HTML generator for AutoSoundHQ
-// Requirements:
-//   - package.json: { "type": "module", "scripts": { "build": "node scripts/generate.js" } }
-//   - deps: "@notionhq/client"
-// Env (GitHub Actions → Secrets): SITE_NAME, SITE_URL, SKIMLINKS_PUB_ID, GA4_MEASUREMENT_ID,
-//   AMAZON_TRACKING_ID, NOTION_TOKEN, NOTION_DB_ARTICLES, NOTION_DB_PRODUCTS, NOTION_DB_KEYWORDS
+// scripts/generate.js (debug + tolerant)
+// Works with Node 20, package.json "type":"module"
 
 import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
-import { fileURLToPath } from "url";
 import { Client } from "@notionhq/client";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// ---------- Config from env ----------
+// ----- ENV -----
 const SITE_NAME = process.env.SITE_NAME || "AutoSoundHQ";
-const SITE_URL = process.env.SITE_URL || "https://autosoundhq.vercel.app";
-const SKIM = process.env.SKIMLINKS_PUB_ID || "";
-const GA4 = process.env.GA4_MEASUREMENT_ID || "";
-const AMAZON_TAG = process.env.AMAZON_TRACKING_ID || "";
-
+const SITE_URL  = process.env.SITE_URL  || "https://autosoundhq-notion.vercel.app";
+const SKIM      = process.env.SKIMLINKS_PUB_ID || "";
+const GA4       = process.env.GA4_MEASUREMENT_ID || "";
+const AMAZON_TAG= process.env.AMAZON_TRACKING_ID || "";
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
-const DB_ARTICLES = process.env.NOTION_DB_ARTICLES;
-const DB_PRODUCTS = process.env.NOTION_DB_PRODUCTS;
+const DB_ARTICLES  = process.env.NOTION_DB_ARTICLES;
+const DB_PRODUCTS  = process.env.NOTION_DB_PRODUCTS;
 
-// Fail early if required env is missing (visible in Actions logs)
-for (const [k, v] of Object.entries({
-  NOTION_TOKEN,
-  DB_ARTICLES,
-  DB_PRODUCTS,
-})) {
-  if (!v) {
-    console.error(`Missing env: ${k}`);
-    process.exit(1);
-  }
+if (!NOTION_TOKEN || !DB_ARTICLES) {
+  console.error("Missing env: NOTION_TOKEN or NOTION_DB_ARTICLES");
+  process.exit(1);
 }
 
 const notion = new Client({ auth: NOTION_TOKEN });
 
-const PUB_DIR = path.join(process.cwd(), "public");
-const TPL_DIR = path.join(process.cwd(), "templates");
+const PUB_DIR = "public";
+const TPL_DIR = "templates";
 
-// ---------- Helpers ----------
-const ensureDir = async (p) => fsp.mkdir(p, { recursive: true });
-
+// ---------- helpers ----------
+const ensureDir = (p) => fsp.mkdir(p, { recursive: true });
 const write = async (rel, content) => {
   const full = path.join(PUB_DIR, rel);
   await ensureDir(path.dirname(full));
   await fsp.writeFile(full, content, "utf8");
 };
 
-const readTpl = (name, fallback = "") => {
-  const p = path.join(TPL_DIR, name);
-  return fs.existsSync(p) ? fs.readFileSync(p, "utf8") : fallback;
+const read = (f, fb="") => {
+  const p = path.join(TPL_DIR, f);
+  return fs.existsSync(p) ? fs.readFileSync(p, "utf8") : fb;
 };
 
 const YEAR = new Date().getFullYear();
 
-const HEAD_FALLBACK = `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" href="/assets/img/favicon.ico">
-    <link rel="stylesheet" href="/assets/css/styles.css" />
-    <meta name="robots" content="index,follow" />
-    <title>{{TITLE}}</title>
-    <meta name="description" content="{{DESC}}"/>
-    <!-- Google Analytics -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id={{GA4}}"></script>
-    <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','{{GA4}}');</script>
-    <!-- Skimlinks -->
-    <script type="text/javascript" src="https://s.skimresources.com/js/{{SKIM}}.skimlinks.js"></script>
-  </head>
-  <body>
-`;
-const NAV_FALLBACK = `
-<header class="site-header">
-  <div class="container">
-    <a class="logo" href="/"><span>Auto</span>SoundHQ</a>
-    <nav>
-      <a href="/articles/index.html">Articles</a>
-      <a href="/about.html">About</a>
-      <a href="/contact.html">Contact</a>
-      <a href="/disclosure.html">Affiliate Disclosure</a>
-    </nav>
-  </div>
-</header>
-`;
-const FOOT_FALLBACK = `
-<footer class="site-footer">
-  <div class="container">
-    <p>© {{YEAR}} ${SITE_NAME}. All rights reserved.</p>
-    <p><a href="/privacy.html">Privacy</a> • <a href="/terms.html">Terms</a> • <a href="/sitemap.xml">Sitemap</a></p>
-  </div>
-</footer>
-</body></html>
-`;
+const HEAD = `<!doctype html><html lang="en"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<link rel="icon" href="/assets/img/favicon.ico">
+<link rel="stylesheet" href="/assets/css/styles.css"/>
+<title>{{TITLE}}</title><meta name="description" content="{{DESC}}"/>
+<script async src="https://www.googletagmanager.com/gtag/js?id={{GA4}}"></script>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','{{GA4}}');</script>
+<script src="https://s.skimresources.com/js/{{SKIM}}.skimlinks.js"></script>
+</head><body>`;
+const NAV = `<header class="site-header"><div class="container">
+<a class="logo" href="/"><span>Auto</span>SoundHQ</a>
+<nav><a href="/articles/index.html">Articles</a> <a href="/about.html">About</a> <a href="/contact.html">Contact</a> <a href="/disclosure.html">Affiliate Disclosure</a></nav>
+</div></header>`;
+const FOOT = `<footer class="site-footer"><div class="container">
+<p>© ${YEAR} ${SITE_NAME}. All rights reserved.</p>
+<p><a href="/privacy.html">Privacy</a> • <a href="/terms.html">Terms</a> • <a href="/sitemap.xml">Sitemap</a></p>
+</div></footer></body></html>`;
 
-const layout = ({ title, desc, body }) => {
-  const head =
-    readTpl("head.html", HEAD_FALLBACK)
-      .replace(/{{TITLE}}/g, title)
-      .replace(/{{DESC}}/g, desc || "")
-      .replace(/{{GA4}}/g, GA4)
-      .replace(/{{SKIM}}/g, SKIM);
-  const nav = readTpl("nav.html", NAV_FALLBACK);
-  const foot = readTpl("footer.html", FOOT_FALLBACK).replace(/{{YEAR}}/g, String(YEAR));
-  return head + nav + body + foot;
-};
+const layout = ({title, desc, body}) =>
+  (read("head.html", HEAD).replace(/{{TITLE}}/g, title).replace(/{{DESC}}/g, desc||"")
+    .replace(/{{GA4}}/g, GA4).replace(/{{SKIM}}/g, SKIM))
+  + (read("nav.html", NAV)) + body + (read("footer.html", FOOT));
 
-const get = (p) => {
-  if (!p) return "";
-  if (p.type === "title") return p.title.map((t) => t.plain_text).join("");
-  if (p.type === "rich_text") return p.rich_text.map((t) => t.plain_text).join("");
-  if (p.type === "select") return p.select ? p.select.name : "";
-  if (p.type === "multi_select") return p.multi_select.map((s) => s.name).join(", ");
-  if (p.type === "url") return p.url || "";
-  if (p.type === "number") return String(p.number ?? "");
-  if (p.type === "date") return p.date?.start || "";
-  if (p.type === "relation") return p.relation?.map((r) => r.id) || [];
+// -------- Notion tolerant accessors --------
+const getFirstTitle = (properties) => {
+  for (const [k, v] of Object.entries(properties)) {
+    if (v?.type === "title") {
+      return v.title?.map(t => t.plain_text).join("") || "";
+    }
+  }
   return "";
 };
 
-const slugify = (s) =>
-  (s || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "");
+const getByNameCI = (properties, names, allowedTypes=[]) => {
+  // case-insensitive property lookup
+  const keys = Object.keys(properties);
+  const wanted = names.map(n => n.toLowerCase());
+  const foundKey = keys.find(k => wanted.includes(k.toLowerCase()));
+  if (!foundKey) return undefined;
+  const prop = properties[foundKey];
+  if (allowedTypes.length && !allowedTypes.includes(prop?.type)) return undefined;
+  return prop;
+};
 
-// ---------- Notion fetch ----------
+const textFrom = (prop) => {
+  if (!prop) return "";
+  if (prop.type === "rich_text") return prop.rich_text?.map(t => t.plain_text).join("") || "";
+  if (prop.type === "url") return prop.url || "";
+  if (prop.type === "number") return String(prop.number ?? "");
+  if (prop.type === "select") return prop.select?.name || "";
+  if (prop.type === "multi_select") return prop.multi_select?.map(s => s.name).join(",") || "";
+  if (prop.type === "title") return prop.title?.map(t=>t.plain_text).join("") || "";
+  return "";
+};
+
+const truthyPublished = (properties) => {
+  // status(select)=Published OR published(checkbox)=true OR status text contains "published"
+  const statusProp = getByNameCI(properties, ["status","Status"], ["select","rich_text","title"]);
+  const statusName = textFrom(statusProp).trim();
+  const checkboxProp = getByNameCI(properties, ["published","is_published","published_at"], ["checkbox"]);
+  const checkbox = checkboxProp?.checkbox === true;
+  return checkbox || /^published$/i.test(statusName);
+};
+
+const slugFrom = (properties) => {
+  const slugProp = getByNameCI(properties, ["slug","Slug","url_slug","permalink"], ["rich_text","title","url"]);
+  let slug = (textFrom(slugProp) || "").trim();
+  if (!slug) {
+    // fallback: slugify title
+    const t = getFirstTitle(properties);
+    slug = t.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"");
+  }
+  return slug;
+};
+
+// ---------- fetch ----------
 async function fetchAll(dbId) {
-  const results = [];
+  const items = [];
   let cursor;
   do {
     const res = await notion.databases.query({ database_id: dbId, start_cursor: cursor });
-    results.push(...res.results);
+    items.push(...res.results);
     cursor = res.has_more ? res.next_cursor : undefined;
   } while (cursor);
-  return results;
+  return items;
 }
 
-// ---------- Build ----------
+// ---------- main ----------
 async function main() {
-  // Ensure /public structure & copy assets if present at repo root
+  // ensure assets
   await ensureDir(path.join(PUB_DIR, "assets/css"));
   await ensureDir(path.join(PUB_DIR, "assets/img"));
+  if (fs.existsSync("styles.css")) await fsp.copyFile("styles.css", path.join(PUB_DIR, "assets/css/styles.css"));
+  if (fs.existsSync("favicon.ico")) await fsp.copyFile("favicon.ico", path.join(PUB_DIR, "assets/img/favicon.ico"));
 
-  // copy styles.css if exists at repo root
-  if (fs.existsSync(path.join(process.cwd(), "styles.css"))) {
-    await fsp.copyFile(path.join(process.cwd(), "styles.css"), path.join(PUB_DIR, "assets/css/styles.css"));
-  }
-  // copy favicon.ico if exists at repo root
-  if (fs.existsSync(path.join(process.cwd(), "favicon.ico"))) {
-    await fsp.copyFile(path.join(process.cwd(), "favicon.ico"), path.join(PUB_DIR, "assets/img/favicon.ico"));
-  }
+  // ARTICLES
+  const pages = await fetchAll(DB_ARTICLES);
+  console.log(`Articles returned: ${pages.length}`);
 
-  // Products map
-  const products = await fetchAll(DB_PRODUCTS);
-  const pMap = {};
-  for (const p of products) {
-    const pr = p.properties;
-    pMap[p.id] = {
-      name: get(pr.name),
-      brand: get(pr.brand),
-      category: get(pr.category),
-      size: get(pr.size),
-      rms: get(pr.rms_power),
-      imp: get(pr.impedance),
-      sens: get(pr.sensitivity_db),
-      url: get(pr.url),
-      img: get(pr.image_url),
-      price: get(pr.price_bucket),
-      pros: get(pr.pros),
-      cons: get(pr.cons),
-    };
-  }
-
-  // Articles
-  const articles = await fetchAll(DB_ARTICLES);
   const published = [];
-  for (const a of articles) {
-    const pr = a.properties;
-    const status = get(pr.status);
-    const title = get(pr.title);
-    if (status !== "Published") continue;
 
-    const slug = get(pr.slug) || slugify(title);
-    const intro = get(pr.intro);
-    const rel = get(pr.products);
-    const prods = Array.isArray(rel) ? rel.map((id) => pMap[id]).filter(Boolean) : [];
+  for (const page of pages) {
+    const props = page.properties || {};
+    const propKeys = Object.keys(props);
+    const title = getFirstTitle(props);
+    const slug  = slugFrom(props);
+    const isPub = truthyPublished(props);
 
-    let body = `<main class="container"><h1>${title}</h1>`;
-    if (intro) body += `<p>${intro}</p>`;
-
-    if (prods.length) {
-      body += `<h2>Top Picks</h2><div class="grid">`;
-      for (const prd of prods.slice(0, 8)) {
-        let link = prd?.url || "#";
-        if (AMAZON_TAG && /amazon\./.test(link)) {
-          try {
-            const u = new URL(link);
-            u.searchParams.set("tag", AMAZON_TAG);
-            link = u.toString();
-          } catch {}
-        }
-        body += `<article class="card">
-          <h3>${prd?.name || "Product"}</h3>
-          <p>${[prd?.brand, prd?.size, prd?.rms ? `${prd.rms}W RMS` : "", prd?.imp].filter(Boolean).join(" • ")}</p>
-          <p><a href="${link}" target="_blank" rel="sponsored noopener">View</a></p>
-          ${prd?.pros ? `<p><small>Pros: ${prd.pros}</small></p>` : ""}
-          ${prd?.cons ? `<p><small>Cons: ${prd.cons}</small></p>` : ""}
-        </article>`;
-      }
-      body += `</div>`;
+    // DEBUG: show what we detected for each row
+    console.log(`Found article: "${title}" | slug=${slug} | statusPublished=${isPub}`);
+    if (title === "" || !slug) {
+      console.log(`  ⚠ props for page ${page.id.slice(0,6)} keys=`, propKeys);
     }
 
-    body += `<hr/><p><em>Disclosure:</em> We may earn a commission when you buy via links on our site.</p></main>`;
+    if (!isPub) continue;
 
-    const html = layout({ title: `${title} — ${SITE_NAME}`, desc: intro || "", body });
-    await write(`articles/${slug}.html`, html);
+    const descProp = getByNameCI(props, ["description","intro","summary","Description"], ["rich_text","title"]);
+    const desc = textFrom(descProp);
+
+    // Build simple article page
+    const body = `<main class="container">
+      <h1>${title}</h1>
+      ${desc ? `<p>${desc}</p>` : ""}
+      <p><em>Disclosure:</em> We may earn a commission when you buy via links on our site.</p>
+    </main>`;
+    await write(`articles/${slug}.html`, layout({ title: `${title} — ${SITE_NAME}`, desc, body }));
     published.push({ title, slug });
   }
 
-  // Articles index
-  const list = published.length
-    ? published.map((p) => `<li><a href="/articles/${p.slug}.html">${p.title}</a></li>`).join("\n")
-    : "<li>No published articles yet.</li>";
-  await write(
-    "articles/index.html",
-    layout({
-      title: `${SITE_NAME} Articles`,
-      desc: `All ${SITE_NAME} guides and product roundups.`,
-      body: `<main class="container"><h1>Articles & Guides</h1><ul>${list}</ul></main>`,
-    })
-  );
+  // ARTICLES index
+  const listHtml = published.length
+    ? `<ul>${published.map(p => `<li><a href="/articles/${p.slug}.html">${p.title}</a></li>`).join("\n")}</ul>`
+    : `<p>No published articles yet.</p>`;
+  await write("articles/index.html", layout({
+    title: `${SITE_NAME} Articles`,
+    desc: `All ${SITE_NAME} guides and product roundups.`,
+    body: `<main class="container"><h1>Articles & Guides</h1>${listHtml}</main>`
+  }));
 
-  // Home
-  await write(
-    "index.html",
-    layout({
-      title: `${SITE_NAME} — The Easiest Way to Choose Car Audio`,
-      desc: `Expert, no-fluff car audio picks.`,
-      body: `<section class="hero"><div class="container">
-        <h1>Upgrade Your Car's Sound—Without Guesswork</h1>
-        <p>We compare speakers, subs, amps, and head units across budgets and use-cases. Every pick links to trusted retailers. You buy, we may earn a commission.</p>
-        <p><a class="btn" href="/articles/index.html">Browse Top Picks</a></p>
-      </div></section>`,
-    })
-  );
+  // Home + legal + sitemap/robots (light)
+  await write("index.html", layout({
+    title: `${SITE_NAME} — The Easiest Way to Choose Car Audio`,
+    desc: `Expert, no-fluff car audio picks.`,
+    body: `<section class="hero"><div class="container">
+      <h1>Upgrade Your Car's Sound—Without Guesswork</h1>
+      <p>We compare speakers, subs, amps, and head units across budgets and use-cases. Every pick links to trusted retailers. You buy, we may earn a commission.</p>
+      <p><a class="btn" href="/articles/index.html">Browse Top Picks</a></p>
+    </div></section>`
+  }));
 
-  // Legal
-  const legal = (t, b) =>
-    layout({ title: `${t} — ${SITE_NAME}`, desc: t, body: `<main class="container"><h1>${t}</h1>${b}</main>` });
-  await write("about.html", legal("About", `<p>${SITE_NAME} helps drivers upgrade their sound with unbiased recommendations.</p>`));
-  await write("contact.html", legal("Contact", `<p>Email us at <a href="mailto:carsoundhq@gmail.com">carsoundhq@gmail.com</a>.</p>`));
-  await write(
-    "disclosure.html",
-    legal("Affiliate Disclosure", `<p>We may earn a commission when you buy through links on our site. As an Amazon Associate we earn from qualifying purchases.</p>`)
-  );
-  await write(
-    "privacy.html",
-    legal("Privacy Policy", `<p>We use Google Analytics to understand traffic and improve our content. Partners may use cookies to track referrals.</p>`)
-  );
-  await write("terms.html", legal("Terms of Use", `<p>All content is for informational purposes only. Verify fitment and specifications before purchase.</p>`));
+  const legal = (t,b)=>layout({title:`${t} — ${SITE_NAME}`,desc:t,body:`<main class="container"><h1>${t}</h1>${b}</main>`});
+  await write("about.html", legal("About", `<p>${SITE_NAME} helps drivers upgrade their sound.</p>`));
+  await write("contact.html", legal("Contact", `<p>Email: <a href="mailto:carsoundhq@gmail.com">carsoundhq@gmail.com</a></p>`));
+  await write("disclosure.html", legal("Affiliate Disclosure", `<p>We may earn a commission when you buy through links on our site. As an Amazon Associate we earn from qualifying purchases.</p>`));
+  await write("privacy.html", legal("Privacy Policy", `<p>We use Google Analytics to improve our content.</p>`));
+  await write("terms.html", legal("Terms of Use", `<p>All content is for informational purposes only.</p>`));
 
-  // robots + sitemap
   await write("robots.txt", `User-agent: *\nAllow: /\nSitemap: ${SITE_URL}/sitemap.xml\n`);
-  const urls = ["/", "/articles/index.html", ...published.map((p) => `/articles/${p.slug}.html`), "/about.html", "/contact.html", "/disclosure.html", "/privacy.html", "/terms.html"];
-  const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-${urls.map((u) => `  <url><loc>${SITE_URL}${u}</loc></url>`).join("\n")}
-</urlset>
-`;
-  await write("sitemap.xml", sitemap);
+  const urls = ["/", "/articles/index.html", ...published.map(p=>`/articles/${p.slug}.html`), "/about.html", "/contact.html", "/disclosure.html", "/privacy.html", "/terms.html"];
+  await write("sitemap.xml", `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map(u=>`  <url><loc>${SITE_URL}${u}</loc></url>`).join("\n")}\n</urlset>\n`);
 
-  console.log("Build complete. Files written to /public");
+  console.log(`Published articles: ${published.length}`);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+main().catch(err => { console.error(err); process.exit(1); });
