@@ -4,15 +4,27 @@ on:
   push:
     branches: [ main ]
   schedule:
-    - cron: '0 9 * * *'   # every day at 09:00 UTC
+    - cron: '0 9 * * *'   # daily 09:00 UTC
   workflow_dispatch:
 
 jobs:
   build:
-    if: github.actor != 'github-actions[bot]'   # prevent loop
+    if: github.actor != 'github-actions[bot]'   # prevent self-trigger loop
     runs-on: ubuntu-latest
     permissions:
       contents: write
+
+    # ⬇️ Inject your repository secrets as environment variables
+    env:
+      SITE_NAME:              ${{ secrets.SITE_NAME }}
+      SITE_URL:               ${{ secrets.SITE_URL }}
+      SKIMLINKS_PUB_ID:       ${{ secrets.SKIMLINKS_PUB_ID }}
+      GA4_MEASUREMENT_ID:     ${{ secrets.GA4_MEASUREMENT_ID }}
+      AMAZON_TRACKING_ID:     ${{ secrets.AMAZON_TRACKING_ID }}
+      NOTION_TOKEN:           ${{ secrets.NOTION_TOKEN }}
+      NOTION_DB_ARTICLES:     ${{ secrets.NOTION_DB_ARTICLES }}
+      NOTION_DB_PRODUCTS:     ${{ secrets.NOTION_DB_PRODUCTS }}
+      NOTION_DB_KEYWORDS:     ${{ secrets.NOTION_DB_KEYWORDS }}
 
     steps:
       - name: Checkout
@@ -31,7 +43,7 @@ jobs:
           node-version: 20
 
       - name: Install deps
-        run: npm ci
+        run: npm ci || npm i
 
       - name: Build static site from Notion
         run: npm run build
