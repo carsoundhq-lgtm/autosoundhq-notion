@@ -1,2 +1,16 @@
 :root { --bg:#0b0c10; --ink:#e8eef2; --muted:#9fb3c8; --accent:#56ccf2; --card:#11141a; }
 *{box-sizing:border-box} body{margin:0;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--ink);}
+/* Ensure article list text is visible regardless of other resets */
+.article-list { 
+  list-style: disc; 
+  padding-left: 1.5rem; 
+  font-size: 1rem; 
+  line-height: 1.6;
+}
+.article-list li { 
+  margin: 0.4rem 0; 
+}
+.article-list a { 
+  color: #a3c0ff;        /* visible on dark bg */
+  text-decoration: underline; 
+}
