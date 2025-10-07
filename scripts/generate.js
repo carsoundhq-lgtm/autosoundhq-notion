@@ -171,9 +171,11 @@ async function main() {
   }
 
   // ARTICLES index
-  const listHtml = published.length
-    ? `<ul>${published.map(p => `<li><a href="/articles/${p.slug}.html">${p.title}</a></li>`).join("\n")}</ul>`
-    : `<p>No published articles yet.</p>`;
+const listHtml = published.length
+  ? `<ul class="article-list">${published.map(p =>
+      `<li><a href="/articles/${p.slug}.html">${p.title}</a></li>`
+    ).join("\n")}</ul>`
+  : `<p>No published articles yet.</p>`;
   await write("articles/index.html", layout({
     title: `${SITE_NAME} Articles`,
     desc: `All ${SITE_NAME} guides and product roundups.`,
