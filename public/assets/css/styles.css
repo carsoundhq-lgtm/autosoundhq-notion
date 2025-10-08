@@ -1,15 +1,2 @@
 :root { --bg:#0b0c10; --ink:#e8eef2; --muted:#9fb3c8; --accent:#56ccf2; --card:#11141a; }
 *{box-sizing:border-box} body{margin:0;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--ink);}
-/* Article list (already added earlier) */
-.article-list { list-style: disc; padding-left: 1.5rem; font-size: 1rem; line-height: 1.6; }
-.article-list li { margin: 0.4rem 0; }
-.article-list a { text-decoration: underline; }
-
-/* Product cards */
-.picks { margin: 2rem 0; }
-.picks .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; }
-.card { background: #111; border: 1px solid #222; border-radius: 12px; padding: 1rem; }
-.card img { width: 100%; height: auto; border-radius: 8px; display:block; margin-bottom: .5rem; }
-.card h3 { font-size: 1rem; margin: .3rem 0 .2rem; }
-.card .meta { font-size: .9rem; opacity: .8; margin: 0 0 .4rem; }
-.card .btn { display:inline-block; padding:.45rem .8rem; border:1px solid #2a6bff; border-radius:8px; text-decoration:none; }
