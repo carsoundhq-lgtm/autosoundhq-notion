@@ -25,6 +25,8 @@ jobs:
       NOTION_DB_ARTICLES:     ${{ secrets.NOTION_DB_ARTICLES }}
       NOTION_DB_PRODUCTS:     ${{ secrets.NOTION_DB_PRODUCTS }}
       NOTION_DB_KEYWORDS:     ${{ secrets.NOTION_DB_KEYWORDS }}
+      BREVO_FORM_URL:         ${{ secrets.BREVO_FORM_URL }}
+
 
     steps:
       - name: Checkout
