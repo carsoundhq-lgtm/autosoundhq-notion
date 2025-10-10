@@ -1,5 +1,5 @@
-// scripts/generate.js — AutoSoundHQ static site generator
-// Node >= 18, package.json should have: { "type": "module" }
+// scripts/generate.js — AutoSoundHQ static site generator (Amazon search fallback)
+// Node >= 18; package.json should have: { "type": "module" }
 
 import fs from "fs";
 import fsp from "fs/promises";
@@ -11,7 +11,7 @@ const SITE_NAME      = process.env.SITE_NAME || "AutoSoundHQ";
 const SITE_URL       = process.env.SITE_URL  || "https://autosoundhq-notion.vercel.app";
 const SKIM_PUB_ID    = process.env.SKIMLINKS_PUB_ID || "";
 const GA4            = process.env.GA4_MEASUREMENT_ID || "";
-const AMAZON_TAG     = process.env.AMAZON_TRACKING_ID || "autosoundhq-20"; // your StoreID
+const AMAZON_TAG     = process.env.AMAZON_TRACKING_ID || "autosoundhq-20"; // your Associate tag
 const BREVO_FORM_URL = process.env.BREVO_FORM_URL || "";
 
 const NOTION_TOKEN   = process.env.NOTION_TOKEN;
@@ -79,7 +79,7 @@ const pageLayout = ({ title, desc, body, jsonld = "" }) =>
   + body
   + read("footer.html", FOOT);
 
-/* ========= Notion property helpers ========= */
+/* ========= Notion helpers ========= */
 const getByNameCI = (properties, names, types = []) => {
   const keys = Object.keys(properties || {});
   const wanted = names.map(n => n.toLowerCase());
@@ -137,34 +137,24 @@ async function fetchAll(dbId) {
   return out;
 }
 
-/* ========= Affiliate link formatter ========= */
-function normalizeAmazon(url, tag) {
-  if (!url) return "";
-  try {
-    const u = new URL(url.startsWith("http") ? url : `https://${url}`);
-    if (!/amazon\./i.test(u.hostname)) return url;          // non-Amazon: return untouched
-    // enforce canonical dp path if possible (keep current if already dp)
-    // Add/replace tag
-    u.searchParams.set("tag", tag);
-    // optional hygiene: strip known clutter params
-    ["ascsubtag","linkCode","creativeASIN","creative","camp","asc_campaign"].forEach(p => u.searchParams.delete(p));
-    return u.toString();
-  } catch {
-    // if it was missing protocol, try a quick manual prefix
-    if (/^amazon\./i.test(url)) return `https://www.${url}${url.includes("?") ? "&" : "?"}tag=${encodeURIComponent(tag)}`;
-    return url;
+/* ========= Affiliate link builder ========= */
+/**
+ * Always use an Amazon SEARCH link (never 404) and append tag.
+ * For everything else, return the given URL (Skimlinks will monetize).
+ */
+function affiliateURL(name, raw) {
+  if (!raw) raw = "";
+  const isAmazon = /(^https?:\/\/)?([a-z0-9.-]*\.)?amazon\./i.test(raw) || /amazon/i.test(name);
+  if (isAmazon) {
+    const q = encodeURIComponent(name || "");
+    return `https://www.amazon.com/s?k=${q}&tag=${encodeURIComponent(AMAZON_TAG)}`;
   }
-}
-
-function affiliateURL(raw) {
-  if (!raw) return "";
-  if (/amazon\./i.test(raw)) return normalizeAmazon(raw, AMAZON_TAG);
-  return raw; // Skimlinks handles other merchants
+  return raw;
 }
 
 /* ========= MAIN ========= */
 async function main() {
-  // assets: copy root styles and favicon
+  // assets
   await ensureDir(path.join(PUB_DIR, "assets/css"));
   await ensureDir(path.join(PUB_DIR, "assets/img"));
   if (fs.existsSync("styles.css"))
@@ -172,18 +162,18 @@ async function main() {
   if (fs.existsSync("favicon.ico"))
     await fsp.copyFile("favicon.ico", path.join(PUB_DIR, "assets/img/favicon.ico"));
 
-  // ----- PRODUCTS (optional but recommended)
+  // ----- PRODUCTS
   const productsMap = {};
   if (DB_PRODUCTS) {
     const products = await fetchAll(DB_PRODUCTS);
     for (const p of products) {
       const pr = p.properties || {};
-      const name = firstTitle(pr);
-      const img  = textFrom(getByNameCI(pr, ["image_url","Image","image","photo"], ["url","rich_text"]));
-      const link = textFrom(getByNameCI(pr, ["affiliate_link","url","link","purchase_url"], ["url","rich_text"]));
-      const brand= textFrom(getByNameCI(pr, ["brand"], ["rich_text","select","title"]));
-      const price= textFrom(getByNameCI(pr, ["price","price_bucket","msrp"], ["rich_text","number","select"]));
-      const desc = textFrom(getByNameCI(pr, ["description","blurb","summary"], ["rich_text","title"]));
+      const name  = firstTitle(pr);
+      const img   = textFrom(getByNameCI(pr, ["image_url","Image","image","photo"], ["url","rich_text"]));
+      const link  = textFrom(getByNameCI(pr, ["affiliate_link","url","link","purchase_url"], ["url","rich_text"]));
+      const brand = textFrom(getByNameCI(pr, ["brand"], ["rich_text","select","title"]));
+      const price = textFrom(getByNameCI(pr, ["price","price_bucket","msrp"], ["rich_text","number","select"]));
+      const desc  = textFrom(getByNameCI(pr, ["description","blurb","summary"], ["rich_text","title"]));
       productsMap[p.id] = { name, img, link, brand, price, desc };
     }
     console.log(`Loaded products: ${Object.keys(productsMap).length}`);
@@ -208,13 +198,13 @@ async function main() {
     const rel  = getByNameCI(props, ["products","Products"], ["relation"]);
     const ids  = relIds(rel);
 
-    /* ----- build product cards UI ----- */
+    // Product cards
     let cards = "";
     if (ids.length) {
       const cardHTML = ids.map(id => {
         const pr = productsMap[id] || {};
         const name = pr.name || "Product";
-        const href = affiliateURL(pr.link || "");
+        const href = affiliateURL(name, pr.link || "");
         const img  = pr.img || "";
         const meta = [pr.brand, pr.price].filter(Boolean).join(" • ");
         const safeDesc = pr.desc || "";
@@ -224,7 +214,7 @@ async function main() {
           <h3>${name}</h3>
           ${meta ? `<p class="meta">${meta}</p>` : ""}
           ${safeDesc ? `<p>${safeDesc}</p>` : ""}
-          ${href ? `<p><a class="btn" href="${href}" target="_blank" rel="sponsored noopener">View</a></p>` : ""}
+          <p><a class="btn" href="${href}" target="_blank" rel="sponsored noopener">View</a></p>
         </article>`;
       }).join("");
 
@@ -272,7 +262,7 @@ async function main() {
     body: `<main class="container"><h1>Articles & Guides</h1>${listHtml}</main>`
   }));
 
-  // Home (hero + newsletter)
+  // Home with Brevo subscribe
   const subscribeBlock = BREVO_FORM_URL
     ? `<section class="subscribe">
          <div class="container">
