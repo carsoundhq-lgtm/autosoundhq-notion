@@ -2,43 +2,32 @@
 <rss version="2.0">
 <channel>
   <title><![CDATA[AutoSoundHQ]]></title>
-  <link>SITE_URL = https://autosoundhq-notion.vercel.app
-</link>
+  <link>https://autosoundhq.com</link>
   <description><![CDATA[Latest guides and picks from AutoSoundHQ.]]></description>
   <item>
   <title><![CDATA[How to Tune a Car Amp (Beginners Guide)]]></title>
-  <link>SITE_URL = https://autosoundhq-notion.vercel.app
-/articles/how-to-tune-a-car-amp.html</link>
-  <guid>SITE_URL = https://autosoundhq-notion.vercel.app
-/articles/how-to-tune-a-car-amp.html</guid>
+  <link>https://autosoundhq.com/articles/how-to-tune-a-car-amp.html</link>
+  <guid>https://autosoundhq.com/articles/how-to-tune-a-car-amp.html</guid>
 </item>
 <item>
   <title><![CDATA[Best Underseat Subwoofers for Trucks (No Trunk Space Needed)]]></title>
-  <link>SITE_URL = https://autosoundhq-notion.vercel.app
-/articles/best-underseat-subwoofers-for-trucks.html</link>
-  <guid>SITE_URL = https://autosoundhq-notion.vercel.app
-/articles/best-underseat-subwoofers-for-trucks.html</guid>
+  <link>https://autosoundhq.com/articles/best-underseat-subwoofers-for-trucks.html</link>
+  <guid>https://autosoundhq.com/articles/best-underseat-subwoofers-for-trucks.html</guid>
 </item>
 <item>
   <title><![CDATA[Best 6.5-inch Car Speakers Under $100 (2025)]]></title>
-  <link>SITE_URL = https://autosoundhq-notion.vercel.app
-/articles/best-6-5-inch-car-speakers-under-100.html</link>
-  <guid>SITE_URL = https://autosoundhq-notion.vercel.app
-/articles/best-6-5-inch-car-speakers-under-100.html</guid>
+  <link>https://autosoundhq.com/articles/best-6-5-inch-car-speakers-under-100.html</link>
+  <guid>https://autosoundhq.com/articles/best-6-5-inch-car-speakers-under-100.html</guid>
 </item>
 <item>
   <title><![CDATA[Best 4-Channel Amplifiers for Factory Head Units]]></title>
-  <link>SITE_URL = https://autosoundhq-notion.vercel.app
-/articles/best-4-channel-amplifiers-for-factory-head-units.html</link>
-  <guid>SITE_URL = https://autosoundhq-notion.vercel.app
-/articles/best-4-channel-amplifiers-for-factory-head-units.html</guid>
+  <link>https://autosoundhq.com/articles/best-4-channel-amplifiers-for-factory-head-units.html</link>
+  <guid>https://autosoundhq.com/articles/best-4-channel-amplifiers-for-factory-head-units.html</guid>
 </item>
 <item>
   <title><![CDATA[Coaxial vs Component Speakers: What’s the Difference?]]></title>
-  <link>SITE_URL = https://autosoundhq-notion.vercel.app
-/articles/coaxial-vs-component-speakers.html</link>
-  <guid>SITE_URL = https://autosoundhq-notion.vercel.app
-/articles/coaxial-vs-component-speakers.html</guid>
+  <link>https://autosoundhq.com/articles/coaxial-vs-component-speakers.html</link>
+  <guid>https://autosoundhq.com/articles/coaxial-vs-component-speakers.html</guid>
 </item>
 </channel>
 </rss>

@@ -1,4 +1,3 @@
 User-agent: *
 Allow: /
-Sitemap: SITE_URL = https://autosoundhq-notion.vercel.app
-/sitemap.xml
+Sitemap: https://autosoundhq.com/sitemap.xml
