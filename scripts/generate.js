@@ -50,8 +50,38 @@ const HEAD = `<!doctype html><html lang="en"><head>
 <title>{{TITLE}}</title>
 <meta name="description" content="{{DESC}}"/>
 ${GA4 ? `<script async src="https://www.googletagmanager.com/gtag/js?id=${GA4}"></script>
-<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${GA4}');</script>` : ""}
-${SKIM_PUB_ID ? `<script src="https://s.skimresources.com/js/${SKIM_PUB_ID}.skimlinks.js"></script>` : ""}
+<script>
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config','${GA4}');
+
+// Track affiliate clicks (buttons/links to merchants)
+addEventListener('click', function(e){
+  const a = e.target.closest('a');
+  if(!a) return;
+  const rel = (a.getAttribute('rel')||'').toLowerCase();
+  const cls = (a.getAttribute('class')||'').toLowerCase();
+  // our product buttons have class "btn" + rel="sponsored noopener"
+  if(rel.includes('sponsored') || cls.includes('btn')){
+    try{
+      const href = a.href || '';
+      const card = a.closest('.card');
+      const name = card ? (card.querySelector('h3')?.textContent || '') : '';
+      let merchant = 'other';
+      if(/amazon\./i.test(href)) merchant = 'amazon';
+      else if(/crutchfield\./i.test(href)) merchant = 'crutchfield';
+      gtag('event', 'affiliate_click', {
+        event_category: 'affiliate',
+        event_label: name || href,
+        merchant: merchant,
+        product_name: name,
+        destination: href
+      });
+    }catch(err){}
+  }
+}, true);
+</script>` : ""}
 {{JSONLD}}
 </head><body>`;
 
@@ -301,6 +331,26 @@ async function main() {
     `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${
       urls.map(u => `  <url><loc>${SITE_URL}${u}</loc></url>`).join("\n")
     }\n</urlset>\n`);
+  // ---- RSS feed
+const rssItems = published.map(p => {
+  const url = `${SITE_URL}/articles/${p.slug}.html`;
+  return `<item>
+    <title><![CDATA[${p.title}]]></title>
+    <link>${url}</link>
+    <guid>${url}</guid>
+  </item>`;
+}).join("\n");
+
+const rss = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+  <title><![CDATA[${SITE_NAME}]]></title>
+  <link>${SITE_URL}</link>
+  <description><![CDATA[Latest guides and picks from ${SITE_NAME}.]]></description>
+  ${rssItems}
+</channel>
+</rss>`;
+await write("feed.xml", rss);
 
   console.log(`Published articles: ${published.length}`);
 }
