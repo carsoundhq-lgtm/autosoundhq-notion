@@ -1,35 +1,34 @@
-// scripts/generate.js — modern site + Brevo subscribe + product cards + SEO
-// Works with Node 20 and package.json { "type": "module" }
+// scripts/generate.js — AutoSoundHQ static site generator
+// Node >= 18, package.json should have: { "type": "module" }
 
 import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
 import { Client } from "@notionhq/client";
 
-/* ========= ENV (comes from GitHub Secrets via the workflow) ========= */
-const SITE_NAME          = process.env.SITE_NAME || "AutoSoundHQ";
-const SITE_URL           = process.env.SITE_URL  || "https://autosoundhq-notion.vercel.app";
-const SKIM               = process.env.SKIMLINKS_PUB_ID || "";
-const GA4                = process.env.GA4_MEASUREMENT_ID || "";
-const AMAZON_TAG         = process.env.AMAZON_TRACKING_ID || "";
-const BREVO_FORM_URL     = process.env.BREVO_FORM_URL || ""; // <-- Brevo inline form SHARE URL
+/* ========= ENV ========= */
+const SITE_NAME      = process.env.SITE_NAME || "AutoSoundHQ";
+const SITE_URL       = process.env.SITE_URL  || "https://autosoundhq-notion.vercel.app";
+const SKIM_PUB_ID    = process.env.SKIMLINKS_PUB_ID || "";
+const GA4            = process.env.GA4_MEASUREMENT_ID || "";
+const AMAZON_TAG     = process.env.AMAZON_TRACKING_ID || "autosoundhq-20"; // your StoreID
+const BREVO_FORM_URL = process.env.BREVO_FORM_URL || "";
 
-const NOTION_TOKEN       = process.env.NOTION_TOKEN;
-const DB_ARTICLES        = process.env.NOTION_DB_ARTICLES;
-const DB_PRODUCTS        = process.env.NOTION_DB_PRODUCTS;
+const NOTION_TOKEN   = process.env.NOTION_TOKEN;
+const DB_ARTICLES    = process.env.NOTION_DB_ARTICLES;
+const DB_PRODUCTS    = process.env.NOTION_DB_PRODUCTS;
 
-/* ========= Safety checks ========= */
 if (!NOTION_TOKEN || !DB_ARTICLES) {
   console.error("Missing env: NOTION_TOKEN or NOTION_DB_ARTICLES");
   process.exit(1);
 }
 
-/* ========= Notion & paths ========= */
+/* ========= Notion + paths ========= */
 const notion  = new Client({ auth: NOTION_TOKEN });
 const PUB_DIR = "public";
 const TPL_DIR = "templates";
 
-/* ========= tiny fs helpers ========= */
+/* ========= fs helpers ========= */
 const ensureDir = (p) => fsp.mkdir(p, { recursive: true });
 const write = async (rel, content) => {
   const full = path.join(PUB_DIR, rel);
@@ -41,7 +40,7 @@ const read = (f, fallback = "") => {
   return fs.existsSync(p) ? fs.readFileSync(p, "utf8") : fallback;
 };
 
-/* ========= base HTML pieces ========= */
+/* ========= HTML shells ========= */
 const YEAR = new Date().getFullYear();
 
 const HEAD = `<!doctype html><html lang="en"><head>
@@ -50,9 +49,9 @@ const HEAD = `<!doctype html><html lang="en"><head>
 <link rel="stylesheet" href="/assets/css/styles.css"/>
 <title>{{TITLE}}</title>
 <meta name="description" content="{{DESC}}"/>
-<script async src="https://www.googletagmanager.com/gtag/js?id={{GA4}}"></script>
-<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','{{GA4}}');</script>
-<script src="https://s.skimresources.com/js/{{SKIM}}.skimlinks.js"></script>
+${GA4 ? `<script async src="https://www.googletagmanager.com/gtag/js?id=${GA4}"></script>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${GA4}');</script>` : ""}
+${SKIM_PUB_ID ? `<script src="https://s.skimresources.com/js/${SKIM_PUB_ID}.skimlinks.js"></script>` : ""}
 {{JSONLD}}
 </head><body>`;
 
@@ -75,14 +74,12 @@ const pageLayout = ({ title, desc, body, jsonld = "" }) =>
   read("head.html", HEAD)
     .replace(/{{TITLE}}/g, title)
     .replace(/{{DESC}}/g, desc || "")
-    .replace(/{{GA4}}/g, GA4)
-    .replace(/{{SKIM}}/g, SKIM)
-    .replace(/{{JSONLD}}/g, jsonld)
+    .replace("{{JSONLD}}", jsonld)
   + read("nav.html", NAV)
   + body
   + read("footer.html", FOOT);
 
-/* ========= Notion helpers (tolerant) ========= */
+/* ========= Notion property helpers ========= */
 const getByNameCI = (properties, names, types = []) => {
   const keys = Object.keys(properties || {});
   const wanted = names.map(n => n.toLowerCase());
@@ -96,13 +93,14 @@ const getByNameCI = (properties, names, types = []) => {
 const textFrom = (prop) => {
   if (!prop) return "";
   const t = prop.type;
-  if (t === "title")      return prop.title?.map(i => i.plain_text).join("") || "";
-  if (t === "rich_text")  return prop.rich_text?.map(i => i.plain_text).join("") || "";
-  if (t === "url")        return prop.url || "";
-  if (t === "number")     return String(prop.number ?? "");
-  if (t === "select")     return prop.select?.name || "";
-  if (t === "multi_select") return prop.multi_select?.map(s => s.name).join(",") || "";
-  if (t === "date")       return prop.date?.start || "";
+  if (t === "title")       return prop.title?.map(i => i.plain_text).join("") || "";
+  if (t === "rich_text")   return prop.rich_text?.map(i => i.plain_text).join("") || "";
+  if (t === "url")         return prop.url || "";
+  if (t === "number")      return String(prop.number ?? "");
+  if (t === "select")      return prop.select?.name || "";
+  if (t === "multi_select")return prop.multi_select?.map(s => s.name).join(",") || "";
+  if (t === "date")        return prop.date?.start || "";
+  if (t === "checkbox")    return prop.checkbox ? "true" : "";
   return "";
 };
 
@@ -114,20 +112,20 @@ const firstTitle = (props) => {
 };
 
 const slugFrom = (props) => {
-  let slug = textFrom(getByNameCI(props, ["slug","Slug","url_slug","permalink"], ["rich_text","title","url"])).trim();
+  let slug = textFrom(getByNameCI(props, ["slug","url_slug","permalink"], ["rich_text","title","url"])).trim();
   if (!slug) slug = firstTitle(props).toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,"");
   return slug;
 };
 
 const isPublished = (props) => {
-  const status  = textFrom(getByNameCI(props, ["status","Status"], ["select","rich_text","title"])).trim();
+  const status = textFrom(getByNameCI(props, ["status"], ["select","rich_text","title"])).trim();
   const checked = getByNameCI(props, ["published","is_published"], ["checkbox"])?.checkbox === true;
   return checked || /^published$/i.test(status);
 };
 
 const relIds = (prop) => (prop?.relation || []).map(r => r.id);
 
-/* ========= Notion fetch ========= */
+/* ========= Fetch all from Notion DB ========= */
 async function fetchAll(dbId) {
   const out = [];
   let cursor;
@@ -139,9 +137,34 @@ async function fetchAll(dbId) {
   return out;
 }
 
+/* ========= Affiliate link formatter ========= */
+function normalizeAmazon(url, tag) {
+  if (!url) return "";
+  try {
+    const u = new URL(url.startsWith("http") ? url : `https://${url}`);
+    if (!/amazon\./i.test(u.hostname)) return url;          // non-Amazon: return untouched
+    // enforce canonical dp path if possible (keep current if already dp)
+    // Add/replace tag
+    u.searchParams.set("tag", tag);
+    // optional hygiene: strip known clutter params
+    ["ascsubtag","linkCode","creativeASIN","creative","camp","asc_campaign"].forEach(p => u.searchParams.delete(p));
+    return u.toString();
+  } catch {
+    // if it was missing protocol, try a quick manual prefix
+    if (/^amazon\./i.test(url)) return `https://www.${url}${url.includes("?") ? "&" : "?"}tag=${encodeURIComponent(tag)}`;
+    return url;
+  }
+}
+
+function affiliateURL(raw) {
+  if (!raw) return "";
+  if (/amazon\./i.test(raw)) return normalizeAmazon(raw, AMAZON_TAG);
+  return raw; // Skimlinks handles other merchants
+}
+
 /* ========= MAIN ========= */
 async function main() {
-  // assets
+  // assets: copy root styles and favicon
   await ensureDir(path.join(PUB_DIR, "assets/css"));
   await ensureDir(path.join(PUB_DIR, "assets/img"));
   if (fs.existsSync("styles.css"))
@@ -149,30 +172,24 @@ async function main() {
   if (fs.existsSync("favicon.ico"))
     await fsp.copyFile("favicon.ico", path.join(PUB_DIR, "assets/img/favicon.ico"));
 
-  /* ----- PRODUCTS (optional) ----- */
+  // ----- PRODUCTS (optional but recommended)
   const productsMap = {};
   if (DB_PRODUCTS) {
     const products = await fetchAll(DB_PRODUCTS);
-    console.log(`Products returned: ${products.length}`);
     for (const p of products) {
-      const pr   = p.properties || {};
+      const pr = p.properties || {};
       const name = firstTitle(pr);
       const img  = textFrom(getByNameCI(pr, ["image_url","Image","image","photo"], ["url","rich_text"]));
-      let link   = textFrom(getByNameCI(pr, ["affiliate_link","url","link","purchase_url"], ["url","rich_text"]));
-
-      // auto-append Amazon tag
-      if (AMAZON_TAG && /amazon\./i.test(link)) {
-        try { const u = new URL(link); u.searchParams.set("tag", AMAZON_TAG); link = u.toString(); } catch {}
-      }
-
-      const brand = textFrom(getByNameCI(pr, ["brand"], ["rich_text","select","title"]));
-      const price = textFrom(getByNameCI(pr, ["price","price_bucket","msrp"], ["rich_text","number","select"]));
-      const desc  = textFrom(getByNameCI(pr, ["description","blurb","summary"], ["rich_text","title"]));
+      const link = textFrom(getByNameCI(pr, ["affiliate_link","url","link","purchase_url"], ["url","rich_text"]));
+      const brand= textFrom(getByNameCI(pr, ["brand"], ["rich_text","select","title"]));
+      const price= textFrom(getByNameCI(pr, ["price","price_bucket","msrp"], ["rich_text","number","select"]));
+      const desc = textFrom(getByNameCI(pr, ["description","blurb","summary"], ["rich_text","title"]));
       productsMap[p.id] = { name, img, link, brand, price, desc };
     }
+    console.log(`Loaded products: ${Object.keys(productsMap).length}`);
   }
 
-  /* ----- ARTICLES ----- */
+  // ----- ARTICLES
   const pages = await fetchAll(DB_ARTICLES);
   console.log(`Articles returned: ${pages.length}`);
 
@@ -183,41 +200,49 @@ async function main() {
     const title = firstTitle(props);
     const slug  = slugFrom(props);
     const pub   = isPublished(props);
-    console.log(`Found article: "${title}" | slug=${slug} | statusPublished=${pub}`);
+
+    console.log(`Article: "${title}" (slug=${slug}) published=${pub}`);
     if (!pub) continue;
 
     const desc = textFrom(getByNameCI(props, ["description","intro","summary","Description"], ["rich_text","title"]));
     const rel  = getByNameCI(props, ["products","Products"], ["relation"]);
     const ids  = relIds(rel);
 
-    // Top Picks
+    /* ----- build product cards UI ----- */
     let cards = "";
     if (ids.length) {
-      cards = `<section class="picks"><h2>Top Picks</h2><div class="grid">` +
-        ids.slice(0, 8).map(id => {
-          const pr = productsMap[id] || {};
-          const name = pr.name || "Product";
-          const href = pr.link || "#";
-          const img  = pr.img ? `<img src="${pr.img}" alt="${name}">` : "";
-          const meta = [pr.brand, pr.price].filter(Boolean).join(" • ");
-          return `<article class="card">
-            ${img}
-            <h3>${name}</h3>
-            ${meta ? `<p class="meta">${meta}</p>` : ""}
-            ${pr.desc ? `<p>${pr.desc}</p>` : ""}
-            <p><a class="btn" href="${href}" target="_blank" rel="sponsored noopener">View</a></p>
-          </article>`;
-        }).join("") + `</div></section>`;
+      const cardHTML = ids.map(id => {
+        const pr = productsMap[id] || {};
+        const name = pr.name || "Product";
+        const href = affiliateURL(pr.link || "");
+        const img  = pr.img || "";
+        const meta = [pr.brand, pr.price].filter(Boolean).join(" • ");
+        const safeDesc = pr.desc || "";
+
+        return `<article class="card">
+          ${img ? `<img src="${img}" alt="${name}">` : ""}
+          <h3>${name}</h3>
+          ${meta ? `<p class="meta">${meta}</p>` : ""}
+          ${safeDesc ? `<p>${safeDesc}</p>` : ""}
+          ${href ? `<p><a class="btn" href="${href}" target="_blank" rel="sponsored noopener">View</a></p>` : ""}
+        </article>`;
+      }).join("");
+
+      cards = `<section class="picks">
+        <div class="container">
+          <h2>Top Picks</h2>
+          <div class="grid">${cardHTML}</div>
+          <p class="muted">We may earn a commission when you buy via our links.</p>
+        </div>
+      </section>`;
     }
 
     const body = `<main class="container">
       <h1>${title}</h1>
       ${desc ? `<p>${desc}</p>` : ""}
-      ${cards}
-      <p><em>Disclosure:</em> We may earn a commission when you buy via links on our site.</p>
-    </main>`;
+    </main>
+    ${cards}`;
 
-    // JSON-LD (Article)
     const jsonld = `<script type="application/ld+json">${JSON.stringify({
       "@context":"https://schema.org",
       "@type":"Article",
@@ -239,7 +264,7 @@ async function main() {
 
   // Articles index
   const listHtml = published.length
-    ? `<ul class="article-list">${published.map(p => `<li><a href="/articles/${p.slug}.html">${p.title}</a></li>`).join("\n")}</ul>`
+    ? `<ul class="article-list">${published.map(p => `<li><a href="/articles/${p.slug}.html">${p.title}</a></li>`).join("")}</ul>`
     : `<p>No published articles yet.</p>`;
   await write("articles/index.html", pageLayout({
     title: `${SITE_NAME} Articles`,
@@ -247,7 +272,7 @@ async function main() {
     body: `<main class="container"><h1>Articles & Guides</h1>${listHtml}</main>`
   }));
 
-  // Home (hero + Brevo subscribe iframe if provided)
+  // Home (hero + newsletter)
   const subscribeBlock = BREVO_FORM_URL
     ? `<section class="subscribe">
          <div class="container">
@@ -269,9 +294,9 @@ async function main() {
            ${subscribeBlock}`
   }));
 
-  // Simple legal & meta
+  // Basic pages
   const legal = (t,b)=>pageLayout({title:`${t} — ${SITE_NAME}`, desc:t, body:`<main class="container"><h1>${t}</h1>${b}</main>`});
-  await write("about.html",      legal("About", `<p>${SITE_NAME} helps drivers upgrade their sound.</p>`));
+  await write("about.html",      legal("About", `<p>${SITE_NAME} helps drivers upgrade their sound confidently.</p>`));
   await write("contact.html",    legal("Contact", `<p>Email: <a href="mailto:carsoundhq@gmail.com">carsoundhq@gmail.com</a></p>`));
   await write("disclosure.html", legal("Affiliate Disclosure", `<p>We may earn a commission when you buy through links on our site. As an Amazon Associate we earn from qualifying purchases.</p>`));
   await write("privacy.html",    legal("Privacy Policy", `<p>We use Google Analytics to improve our content.</p>`));
