@@ -219,10 +219,24 @@ async function fetchAll(dbId) {
 function affiliateURL(name, raw) {
   if (!raw) raw = "";
   const isAmazon = /(^https?:\/\/)?([a-z0-9.-]*\.)?amazon\./i.test(raw) || /amazon/i.test(name);
+  const isCrutch = /crutchfield\.com/i.test(raw);
+  const isSonic  = /sonicelectronix\.com/i.test(raw);
+  
   if (isAmazon) {
     const q = encodeURIComponent(name || "");
     return `https://www.amazon.com/s?k=${q}&tag=${encodeURIComponent(AMAZON_TAG)}`;
   }
+
+  // Crutchfield & Sonic = pass through directly
+  if (isCrutch || isSonic) return raw;
+
+  // Everything else → wrap with Skimlinks publisher redirect
+  if (SKIM_PUB_ID) {
+    const enc = encodeURIComponent(raw);
+    return `https://go.skimresources.com/?id=${SKIM_PUB_ID}&xs=1&url=${enc}`;
+  }
+
+  // Default fallback
   return raw;
 }
 
