@@ -1,4 +1,4 @@
-// scripts/generate.js — AutoSoundHQ static site generator (Amazon search fallback)
+// scripts/generate.js — AutoSoundHQ static site generator (full, consolidated)
 // Node >= 18; package.json should have: { "type": "module" }
 
 import fs from "fs";
@@ -40,7 +40,7 @@ const read = (f, fallback = "") => {
   return fs.existsSync(p) ? fs.readFileSync(p, "utf8") : fallback;
 };
 
-/* ========= HTML shells ========= */
+/* ========= HTML shells (with GA4 beacon + OG/Twitter) ========= */
 const YEAR = new Date().getFullYear();
 
 const HEAD = `<!doctype html><html lang="en"><head>
@@ -49,39 +49,70 @@ const HEAD = `<!doctype html><html lang="en"><head>
 <link rel="stylesheet" href="/assets/css/styles.css"/>
 <title>{{TITLE}}</title>
 <meta name="description" content="{{DESC}}"/>
+
+<!-- Open Graph -->
+<meta property="og:type" content="{{OG_TYPE}}">
+<meta property="og:title" content="{{OG_TITLE}}">
+<meta property="og:description" content="{{OG_DESC}}">
+<meta property="og:url" content="{{OG_URL}}">
+<meta property="og:image" content="{{OG_IMAGE}}">
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{{OG_TITLE}}">
+<meta name="twitter:description" content="{{OG_DESC}}">
+<meta name="twitter:image" content="{{OG_IMAGE}}">
+
 ${GA4 ? `<script async src="https://www.googletagmanager.com/gtag/js?id=${GA4}"></script>
 <script>
 window.dataLayer = window.dataLayer || [];
 function gtag(){dataLayer.push(arguments);}
 gtag('js', new Date());
-gtag('config','${GA4}');
+gtag('config','${GA4}', { transport_type: 'beacon' });
 
-// Track affiliate clicks (buttons/links to merchants)
+// OPTIONAL: enable GA4 debug (view in Admin → DebugView)
+// gtag('set', 'debug_mode', true);
+
+function sendAffiliateEvent(name, href){
+  try {
+    gtag('event', 'affiliate_click', {
+      event_category: 'affiliate',
+      event_label: name || href,
+      merchant: /amazon\\./i.test(href) ? 'amazon' : (/crutchfield\\./i.test(href) ? 'crutchfield' : 'other'),
+      product_name: name || '',
+      destination: href,
+      transport_type: 'beacon',
+      event_timeout: 2000
+    });
+  } catch(e) {}
+  // Fallback attempt for very strict blockers
+  try {
+    if (navigator.sendBeacon) {
+      const data = new Blob([], { type: 'application/x-www-form-urlencoded' });
+      navigator.sendBeacon('https://www.google-analytics.com/g/collect?v=2&tid=${GA4}&en=affiliate_click&dl='+encodeURIComponent(location.href), data);
+    }
+  } catch(e) {}
+}
+
+// Capture clicks on product buttons/links
 addEventListener('click', function(e){
   const a = e.target.closest('a');
   if(!a) return;
-  const rel = (a.getAttribute('rel')||'').toLowerCase();
   const cls = (a.getAttribute('class')||'').toLowerCase();
-  // our product buttons have class "btn" + rel="sponsored noopener"
-  if(rel.includes('sponsored') || cls.includes('btn')){
-    try{
-      const href = a.href || '';
-      const card = a.closest('.card');
-      const name = card ? (card.querySelector('h3')?.textContent || '') : '';
-      let merchant = 'other';
-      if(/amazon\./i.test(href)) merchant = 'amazon';
-      else if(/crutchfield\./i.test(href)) merchant = 'crutchfield';
-      gtag('event', 'affiliate_click', {
-        event_category: 'affiliate',
-        event_label: name || href,
-        merchant: merchant,
-        product_name: name,
-        destination: href
-      });
-    }catch(err){}
-  }
+  const rel = (a.getAttribute('rel')||'').toLowerCase();
+  const isAffiliate = cls.includes('btn') || rel.includes('sponsored');
+  if(!isAffiliate) return;
+
+  const card = a.closest('.card');
+  const name = card ? (card.querySelector('h3')?.textContent || '') : '';
+  const href = a.href || '';
+
+  sendAffiliateEvent(name, href);
 }, true);
 </script>` : ""}
+
+${SKIM_PUB_ID ? `<script src="https://s.skimresources.com/js/${SKIM_PUB_ID}.skimlinks.js"></script>` : ""}
+
 {{JSONLD}}
 </head><body>`;
 
@@ -100,14 +131,30 @@ const FOOT = `<footer class="site-footer"><div class="container">
   <p><a href="/privacy.html">Privacy</a> • <a href="/terms.html">Terms</a> • <a href="/sitemap.xml">Sitemap</a></p>
 </div></footer></body></html>`;
 
-const pageLayout = ({ title, desc, body, jsonld = "" }) =>
-  read("head.html", HEAD)
-    .replace(/{{TITLE}}/g, title)
-    .replace(/{{DESC}}/g, desc || "")
-    .replace("{{JSONLD}}", jsonld)
-  + read("nav.html", NAV)
-  + body
-  + read("footer.html", FOOT);
+/** Build a page with OG/Twitter placeholders filled per-page */
+function pageLayout({ title, desc, body, jsonld = "", og = {} }) {
+  const ogDefaults = {
+    type: og.type || "website",
+    title: og.title || title,
+    desc: og.desc || (desc || ""),
+    url: og.url || SITE_URL,
+    image: og.image || `${SITE_URL}/assets/img/og-default.jpg`
+  };
+  return (
+    read("head.html", HEAD)
+      .replace(/{{TITLE}}/g, title)
+      .replace(/{{DESC}}/g, desc || "")
+      .replace(/{{OG_TYPE}}/g, ogDefaults.type)
+      .replace(/{{OG_TITLE}}/g, ogDefaults.title)
+      .replace(/{{OG_DESC}}/g, ogDefaults.desc)
+      .replace(/{{OG_URL}}/g, ogDefaults.url)
+      .replace(/{{OG_IMAGE}}/g, ogDefaults.image)
+      .replace("{{JSONLD}}", jsonld)
+    + read("nav.html", NAV)
+    + body
+    + read("footer.html", FOOT)
+  );
+}
 
 /* ========= Notion helpers ========= */
 const getByNameCI = (properties, names, types = []) => {
@@ -168,10 +215,7 @@ async function fetchAll(dbId) {
 }
 
 /* ========= Affiliate link builder ========= */
-/**
- * Always use an Amazon SEARCH link (never 404) and append tag.
- * For everything else, return the given URL (Skimlinks will monetize).
- */
+/** Always use an Amazon SEARCH link with tag (never 404s). Others unchanged (Skimlinks handles). */
 function affiliateURL(name, raw) {
   if (!raw) raw = "";
   const isAmazon = /(^https?:\/\/)?([a-z0-9.-]*\.)?amazon\./i.test(raw) || /amazon/i.test(name);
@@ -191,6 +235,9 @@ async function main() {
     await fsp.copyFile("styles.css", path.join(PUB_DIR, "assets/css/styles.css"));
   if (fs.existsSync("favicon.ico"))
     await fsp.copyFile("favicon.ico", path.join(PUB_DIR, "assets/img/favicon.ico"));
+  // Optional default OG image (create one if you want a nice social card)
+  if (fs.existsSync("og-default.jpg"))
+    await fsp.copyFile("og-default.jpg", path.join(PUB_DIR, "assets/img/og-default.jpg"));
 
   // ----- PRODUCTS
   const productsMap = {};
@@ -263,6 +310,7 @@ async function main() {
     </main>
     ${cards}`;
 
+    // JSON-LD (Article)
     const jsonld = `<script type="application/ld+json">${JSON.stringify({
       "@context":"https://schema.org",
       "@type":"Article",
@@ -276,7 +324,15 @@ async function main() {
       title: `${title} — ${SITE_NAME}`,
       desc,
       body,
-      jsonld
+      jsonld,
+      og: {
+        type: "article",
+        title,
+        desc,
+        url: `${SITE_URL}/articles/${slug}.html`,
+        // use first product image as OG if available, else default
+        image: (ids.length && productsMap[ids[0]]?.img) ? productsMap[ids[0]].img : `${SITE_URL}/assets/img/og-default.jpg`
+      }
     }));
 
     published.push({ title, slug });
@@ -289,7 +345,14 @@ async function main() {
   await write("articles/index.html", pageLayout({
     title: `${SITE_NAME} Articles`,
     desc: `All ${SITE_NAME} guides and product roundups.`,
-    body: `<main class="container"><h1>Articles & Guides</h1>${listHtml}</main>`
+    body: `<main class="container"><h1>Articles & Guides</h1>${listHtml}</main>`,
+    og: {
+      type: "website",
+      title: `${SITE_NAME} Articles`,
+      desc: `All ${SITE_NAME} guides and product roundups.`,
+      url: `${SITE_URL}/articles/`,
+      image: `${SITE_URL}/assets/img/og-default.jpg`
+    }
   }));
 
   // Home with Brevo subscribe
@@ -311,11 +374,22 @@ async function main() {
              <p>We compare speakers, subs, amps, and head units across budgets and use-cases. Every pick links to trusted retailers. You buy, we may earn a commission.</p>
              <p><a class="btn" href="/articles/index.html">Browse Top Picks</a></p>
            </div></section>
-           ${subscribeBlock}`
+           ${subscribeBlock}`,
+    og: {
+      type: "website",
+      title: SITE_NAME,
+      desc: `Expert, no-fluff car audio picks.`,
+      url: SITE_URL,
+      image: `${SITE_URL}/assets/img/og-default.jpg`
+    }
   }));
 
   // Basic pages
-  const legal = (t,b)=>pageLayout({title:`${t} — ${SITE_NAME}`, desc:t, body:`<main class="container"><h1>${t}</h1>${b}</main>`});
+  const legal = (t,b)=>pageLayout({
+    title:`${t} — ${SITE_NAME}`, desc:t,
+    body:`<main class="container"><h1>${t}</h1>${b}</main>`,
+    og: { type:"website", title:t, desc:t, url:`${SITE_URL}/${t.toLowerCase()}.html`, image:`${SITE_URL}/assets/img/og-default.jpg` }
+  });
   await write("about.html",      legal("About", `<p>${SITE_NAME} helps drivers upgrade their sound confidently.</p>`));
   await write("contact.html",    legal("Contact", `<p>Email: <a href="mailto:carsoundhq@gmail.com">carsoundhq@gmail.com</a></p>`));
   await write("disclosure.html", legal("Affiliate Disclosure", `<p>We may earn a commission when you buy through links on our site. As an Amazon Associate we earn from qualifying purchases.</p>`));
@@ -331,17 +405,18 @@ async function main() {
     `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${
       urls.map(u => `  <url><loc>${SITE_URL}${u}</loc></url>`).join("\n")
     }\n</urlset>\n`);
-  // ---- RSS feed
-const rssItems = published.map(p => {
-  const url = `${SITE_URL}/articles/${p.slug}.html`;
-  return `<item>
-    <title><![CDATA[${p.title}]]></title>
-    <link>${url}</link>
-    <guid>${url}</guid>
-  </item>`;
-}).join("\n");
 
-const rss = `<?xml version="1.0" encoding="UTF-8"?>
+  // ---- RSS feed
+  const rssItems = published.map(p => {
+    const url = `${SITE_URL}/articles/${p.slug}.html`;
+    return `<item>
+  <title><![CDATA[${p.title}]]></title>
+  <link>${url}</link>
+  <guid>${url}</guid>
+</item>`;
+  }).join("\n");
+
+  const rss = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
 <channel>
   <title><![CDATA[${SITE_NAME}]]></title>
@@ -350,7 +425,7 @@ const rss = `<?xml version="1.0" encoding="UTF-8"?>
   ${rssItems}
 </channel>
 </rss>`;
-await write("feed.xml", rss);
+  await write("feed.xml", rss);
 
   console.log(`Published articles: ${published.length}`);
 }
