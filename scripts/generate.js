@@ -1,5 +1,5 @@
-// scripts/generate.js — AutoSoundHQ static site generator (full, consolidated)
-// Node >= 18; package.json should have: { "type": "module" }
+// scripts/generate.js — AutoSoundHQ generator (Wirecutter UI + GA4 + OG/Twitter + RSS + FTC note + Skimlinks wrap)
+// Node >= 18; package.json: { "type": "module" }
 
 import fs from "fs";
 import fsp from "fs/promises";
@@ -8,10 +8,10 @@ import { Client } from "@notionhq/client";
 
 /* ========= ENV ========= */
 const SITE_NAME      = process.env.SITE_NAME || "AutoSoundHQ";
-const SITE_URL       = process.env.SITE_URL  || "https://autosoundhq-notion.vercel.app";
+const SITE_URL       = process.env.SITE_URL  || "https://autosoundhq.com";
 const SKIM_PUB_ID    = process.env.SKIMLINKS_PUB_ID || "";
 const GA4            = process.env.GA4_MEASUREMENT_ID || "";
-const AMAZON_TAG     = process.env.AMAZON_TRACKING_ID || "autosoundhq-20"; // your Associate tag
+const AMAZON_TAG     = process.env.AMAZON_TRACKING_ID || "autosoundhq-20";
 const BREVO_FORM_URL = process.env.BREVO_FORM_URL || "";
 
 const NOTION_TOKEN   = process.env.NOTION_TOKEN;
@@ -40,7 +40,7 @@ const read = (f, fallback = "") => {
   return fs.existsSync(p) ? fs.readFileSync(p, "utf8") : fallback;
 };
 
-/* ========= HTML shells (with GA4 beacon + OG/Twitter) ========= */
+/* ========= HTML shells (GA4 beacon + OG/Twitter) ========= */
 const YEAR = new Date().getFullYear();
 
 const HEAD = `<!doctype html><html lang="en"><head>
@@ -69,45 +69,37 @@ window.dataLayer = window.dataLayer || [];
 function gtag(){dataLayer.push(arguments);}
 gtag('js', new Date());
 gtag('config','${GA4}', { transport_type: 'beacon' });
-
-// OPTIONAL: enable GA4 debug (view in Admin → DebugView)
-// gtag('set', 'debug_mode', true);
+// gtag('set','debug_mode',true);
 
 function sendAffiliateEvent(name, href){
   try {
-    gtag('event', 'affiliate_click', {
-      event_category: 'affiliate',
-      event_label: name || href,
-      merchant: /amazon\\./i.test(href) ? 'amazon' : (/crutchfield\\./i.test(href) ? 'crutchfield' : 'other'),
-      product_name: name || '',
-      destination: href,
-      transport_type: 'beacon',
-      event_timeout: 2000
+    gtag('event','affiliate_click',{
+      event_category:'affiliate',
+      event_label:name||href,
+      merchant:/amazon\\./i.test(href)?'amazon':(/crutchfield\\./i.test(href)?'crutchfield':'other'),
+      product_name:name||'',
+      destination:href,
+      transport_type:'beacon',
+      event_timeout:2000
     });
-  } catch(e) {}
-  // Fallback attempt for very strict blockers
+  } catch(e){}
   try {
-    if (navigator.sendBeacon) {
-      const data = new Blob([], { type: 'application/x-www-form-urlencoded' });
+    if(navigator.sendBeacon){
+      const data=new Blob([], {type:'application/x-www-form-urlencoded'});
       navigator.sendBeacon('https://www.google-analytics.com/g/collect?v=2&tid=${GA4}&en=affiliate_click&dl='+encodeURIComponent(location.href), data);
     }
-  } catch(e) {}
+  } catch(e){}
 }
-
-// Capture clicks on product buttons/links
 addEventListener('click', function(e){
   const a = e.target.closest('a');
   if(!a) return;
-  const cls = (a.getAttribute('class')||'').toLowerCase();
-  const rel = (a.getAttribute('rel')||'').toLowerCase();
+  const cls=(a.getAttribute('class')||'').toLowerCase();
+  const rel=(a.getAttribute('rel')||'').toLowerCase();
   const isAffiliate = cls.includes('btn') || rel.includes('sponsored');
   if(!isAffiliate) return;
-
-  const card = a.closest('.card');
-  const name = card ? (card.querySelector('h3')?.textContent || '') : '';
-  const href = a.href || '';
-
-  sendAffiliateEvent(name, href);
+  const card=a.closest('.card');
+  const name=card?(card.querySelector('h3')?.textContent||''):'';
+  sendAffiliateEvent(name, a.href||'');
 }, true);
 </script>` : ""}
 
@@ -131,7 +123,6 @@ const FOOT = `<footer class="site-footer"><div class="container">
   <p><a href="/privacy.html">Privacy</a> • <a href="/terms.html">Terms</a> • <a href="/sitemap.xml">Sitemap</a></p>
 </div></footer></body></html>`;
 
-/** Build a page with OG/Twitter placeholders filled per-page */
 function pageLayout({ title, desc, body, jsonld = "", og = {} }) {
   const ogDefaults = {
     type: og.type || "website",
@@ -194,6 +185,11 @@ const slugFrom = (props) => {
   return slug;
 };
 
+const dateFrom = (props) => {
+  const d = textFrom(getByNameCI(props, ["date","published_at","Published"], ["date","rich_text"]));
+  return d ? new Date(d) : null;
+};
+
 const isPublished = (props) => {
   const status = textFrom(getByNameCI(props, ["status"], ["select","rich_text","title"])).trim();
   const checked = getByNameCI(props, ["published","is_published"], ["checkbox"])?.checkbox === true;
@@ -215,28 +211,23 @@ async function fetchAll(dbId) {
 }
 
 /* ========= Affiliate link builder ========= */
-/** Always use an Amazon SEARCH link with tag (never 404s). Others unchanged (Skimlinks handles). */
+// Amazon → search link with tag (never 404). Crutchfield/Sonic → leave as-is. Others → Skimlinks wrap.
 function affiliateURL(name, raw) {
   if (!raw) raw = "";
   const isAmazon = /(^https?:\/\/)?([a-z0-9.-]*\.)?amazon\./i.test(raw) || /amazon/i.test(name);
   const isCrutch = /crutchfield\.com/i.test(raw);
   const isSonic  = /sonicelectronix\.com/i.test(raw);
-  
+
   if (isAmazon) {
     const q = encodeURIComponent(name || "");
     return `https://www.amazon.com/s?k=${q}&tag=${encodeURIComponent(AMAZON_TAG)}`;
   }
-
-  // Crutchfield & Sonic = pass through directly
   if (isCrutch || isSonic) return raw;
 
-  // Everything else → wrap with Skimlinks publisher redirect
   if (SKIM_PUB_ID) {
     const enc = encodeURIComponent(raw);
     return `https://go.skimresources.com/?id=${SKIM_PUB_ID}&xs=1&url=${enc}`;
   }
-
-  // Default fallback
   return raw;
 }
 
@@ -249,11 +240,10 @@ async function main() {
     await fsp.copyFile("styles.css", path.join(PUB_DIR, "assets/css/styles.css"));
   if (fs.existsSync("favicon.ico"))
     await fsp.copyFile("favicon.ico", path.join(PUB_DIR, "assets/img/favicon.ico"));
-  // Optional default OG image (create one if you want a nice social card)
   if (fs.existsSync("og-default.jpg"))
     await fsp.copyFile("og-default.jpg", path.join(PUB_DIR, "assets/img/og-default.jpg"));
 
-  // ----- PRODUCTS
+  // PRODUCTS
   const productsMap = {};
   if (DB_PRODUCTS) {
     const products = await fetchAll(DB_PRODUCTS);
@@ -267,13 +257,10 @@ async function main() {
       const desc  = textFrom(getByNameCI(pr, ["description","blurb","summary"], ["rich_text","title"]));
       productsMap[p.id] = { name, img, link, brand, price, desc };
     }
-    console.log(`Loaded products: ${Object.keys(productsMap).length}`);
   }
 
-  // ----- ARTICLES
+  // ARTICLES
   const pages = await fetchAll(DB_ARTICLES);
-  console.log(`Articles returned: ${pages.length}`);
-
   const published = [];
 
   for (const page of pages) {
@@ -281,13 +268,13 @@ async function main() {
     const title = firstTitle(props);
     const slug  = slugFrom(props);
     const pub   = isPublished(props);
-
-    console.log(`Article: "${title}" (slug=${slug}) published=${pub}`);
     if (!pub) continue;
 
     const desc = textFrom(getByNameCI(props, ["description","intro","summary","Description"], ["rich_text","title"]));
     const rel  = getByNameCI(props, ["products","Products"], ["relation"]);
     const ids  = relIds(rel);
+    const dateVal = dateFrom(props);
+    const dateStr = dateVal ? dateVal.toLocaleDateString(undefined, {year:"numeric",month:"short",day:"2-digit"}) : "";
 
     // Product cards
     let cards = "";
@@ -299,38 +286,47 @@ async function main() {
         const img  = pr.img || "";
         const meta = [pr.brand, pr.price].filter(Boolean).join(" • ");
         const safeDesc = pr.desc || "";
-
         return `<article class="card">
-          ${img ? `<img src="${img}" alt="${name}">` : ""}
-          <h3>${name}</h3>
-          ${meta ? `<p class="meta">${meta}</p>` : ""}
-          ${safeDesc ? `<p>${safeDesc}</p>` : ""}
-          <p><a class="btn" href="${href}" target="_blank" rel="sponsored noopener">View</a></p>
+          ${img ? `<div class="thumb"><img loading="lazy" src="${img}" alt="${name}"></div>` : ""}
+          <div class="card-body">
+            <h3>${name}</h3>
+            ${meta ? `<p class="meta">${meta}</p>` : ""}
+            ${safeDesc ? `<p class="excerpt">${safeDesc}</p>` : ""}
+            <p><a class="btn" href="${href}" target="_blank" rel="sponsored noopener" aria-label="View ${name}">View</a></p>
+            <p class="ftc small muted">We may earn a commission at no extra cost to you.</p>
+          </div>
         </article>`;
       }).join("");
 
       cards = `<section class="picks">
         <div class="container">
           <h2>Top Picks</h2>
-          <div class="grid">${cardHTML}</div>
-          <p class="muted">We may earn a commission when you buy via our links.</p>
+          <div class="grid cards-3">${cardHTML}</div>
+          <p class="muted small">As an Amazon Associate we earn from qualifying purchases.</p>
         </div>
       </section>`;
     }
 
-    const body = `<main class="container">
-      <h1>${title}</h1>
-      ${desc ? `<p>${desc}</p>` : ""}
+    const body = `<main class="container article">
+      <header class="article-head">
+        <h1>${title}</h1>
+        ${dateStr ? `<p class="muted small">${dateStr}</p>` : ""}
+        ${desc ? `<p class="lead">${desc}</p>` : ""}
+      </header>
     </main>
     ${cards}`;
 
-    // JSON-LD (Article)
+    const ogImage = (ids.length && productsMap[ids[0]]?.img)
+      ? productsMap[ids[0]].img
+      : `${SITE_URL}/assets/img/og-default.jpg`;
+
     const jsonld = `<script type="application/ld+json">${JSON.stringify({
       "@context":"https://schema.org",
       "@type":"Article",
       "headline": title,
       "description": desc || "",
       "mainEntityOfPage": `${SITE_URL}/articles/${slug}.html`,
+      "datePublished": dateVal ? dateVal.toISOString() : undefined,
       "publisher": { "@type":"Organization", "name": SITE_NAME }
     })}</script>`;
 
@@ -339,46 +335,51 @@ async function main() {
       desc,
       body,
       jsonld,
-      og: {
-        type: "article",
-        title,
-        desc,
-        url: `${SITE_URL}/articles/${slug}.html`,
-        // use first product image as OG if available, else default
-        image: (ids.length && productsMap[ids[0]]?.img) ? productsMap[ids[0]].img : `${SITE_URL}/assets/img/og-default.jpg`
-      }
+      og: { type:"article", title, desc, url:`${SITE_URL}/articles/${slug}.html`, image: ogImage }
     }));
 
-    published.push({ title, slug });
+    published.push({ title, slug, desc, ogImage, dateStr });
   }
 
+  // Sort newest first
+  const publishedSorted = published.slice().reverse();
+
   // Articles index
-  const listHtml = published.length
-    ? `<ul class="article-list">${published.map(p => `<li><a href="/articles/${p.slug}.html">${p.title}</a></li>`).join("")}</ul>`
-    : `<p>No published articles yet.</p>`;
+  const articleCards = publishedSorted.map(p => `
+    <article class="postcard">
+      <div class="postcard-body">
+        <h2><a href="/articles/${p.slug}.html">${p.title}</a></h2>
+        ${p.dateStr ? `<p class="muted small">${p.dateStr}</p>` : ""}
+        ${p.desc ? `<p class="excerpt">${p.desc}</p>` : ""}
+        <p><a class="btn ghost" href="/articles/${p.slug}.html" aria-label="Read ${p.title}">Read</a></p>
+      </div>
+    </article>`).join("");
+
   await write("articles/index.html", pageLayout({
     title: `${SITE_NAME} Articles`,
     desc: `All ${SITE_NAME} guides and product roundups.`,
-    body: `<main class="container"><h1>Articles & Guides</h1>${listHtml}</main>`,
-    og: {
-      type: "website",
-      title: `${SITE_NAME} Articles`,
-      desc: `All ${SITE_NAME} guides and product roundups.`,
-      url: `${SITE_URL}/articles/`,
-      image: `${SITE_URL}/assets/img/og-default.jpg`
-    }
+    body: `<main class="container"><h1>Articles & Guides</h1><div class="postlist">${articleCards}</div></main>`,
+    og: { type:"website", title:`${SITE_NAME} Articles`, desc:`All ${SITE_NAME} guides and product roundups.`, url:`${SITE_URL}/articles/`, image:`${SITE_URL}/assets/img/og-default.jpg` }
   }));
 
-  // Home with Brevo subscribe
-  const subscribeBlock = BREVO_FORM_URL
-    ? `<section class="subscribe">
-         <div class="container">
-           <h2>Get our best picks by email</h2>
-           <p class="muted">No spam. Just 1–2 top recommendations a month.</p>
-           <iframe class="subscribe-iframe" src="${BREVO_FORM_URL}" loading="lazy"></iframe>
-         </div>
-       </section>`
-    : "";
+  // Home
+  const latest3 = publishedSorted.slice(0,3).map(p => `
+    <article class="card flat">
+      <div class="card-body">
+        <h3><a href="/articles/${p.slug}.html">${p.title}</a></h3>
+        ${p.desc ? `<p class="excerpt">${p.desc}</p>` : ""}
+        <p><a class="btn" href="/articles/${p.slug}.html" aria-label="Read ${p.title}">Read</a></p>
+      </div>
+    </article>`).join("");
+
+  const subscribeBlock = BREVO_FORM_URL ? `
+  <section class="subscribe">
+    <div class="container">
+      <h2>Get our best picks by email</h2>
+      <p class="muted">No spam. Just 1–2 top recommendations a month.</p>
+      <iframe class="subscribe-iframe" src="${BREVO_FORM_URL}" loading="lazy"></iframe>
+    </div>
+  </section>` : "";
 
   await write("index.html", pageLayout({
     title: `${SITE_NAME} — The Easiest Way to Choose Car Audio`,
@@ -388,17 +389,15 @@ async function main() {
              <p>We compare speakers, subs, amps, and head units across budgets and use-cases. Every pick links to trusted retailers. You buy, we may earn a commission.</p>
              <p><a class="btn" href="/articles/index.html">Browse Top Picks</a></p>
            </div></section>
+           <section class="highlights"><div class="container">
+             <h2>Latest Guides</h2>
+             <div class="grid cards-3">${latest3}</div>
+           </div></section>
            ${subscribeBlock}`,
-    og: {
-      type: "website",
-      title: SITE_NAME,
-      desc: `Expert, no-fluff car audio picks.`,
-      url: SITE_URL,
-      image: `${SITE_URL}/assets/img/og-default.jpg`
-    }
+    og: { type:"website", title:SITE_NAME, desc:`Expert, no-fluff car audio picks.`, url:SITE_URL, image:`${SITE_URL}/assets/img/og-default.jpg` }
   }));
 
-  // Basic pages
+  // Legal pages
   const legal = (t,b)=>pageLayout({
     title:`${t} — ${SITE_NAME}`, desc:t,
     body:`<main class="container"><h1>${t}</h1>${b}</main>`,
@@ -413,15 +412,15 @@ async function main() {
   // robots + sitemap
   await write("robots.txt", `User-agent: *\nAllow: /\nSitemap: ${SITE_URL}/sitemap.xml\n`);
   const urls = ["/", "/articles/index.html",
-    ...published.map(p => `/articles/${p.slug}.html`),
+    ...publishedSorted.map(p => `/articles/${p.slug}.html`),
     "/about.html","/contact.html","/disclosure.html","/privacy.html","/terms.html"];
   await write("sitemap.xml",
     `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${
       urls.map(u => `  <url><loc>${SITE_URL}${u}</loc></url>`).join("\n")
     }\n</urlset>\n`);
 
-  // ---- RSS feed
-  const rssItems = published.map(p => {
+  // RSS
+  const rssItems = publishedSorted.map(p => {
     const url = `${SITE_URL}/articles/${p.slug}.html`;
     return `<item>
   <title><![CDATA[${p.title}]]></title>
@@ -429,19 +428,16 @@ async function main() {
   <guid>${url}</guid>
 </item>`;
   }).join("\n");
-
   const rss = `<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0">
-<channel>
+<rss version="2.0"><channel>
   <title><![CDATA[${SITE_NAME}]]></title>
   <link>${SITE_URL}</link>
   <description><![CDATA[Latest guides and picks from ${SITE_NAME}.]]></description>
   ${rssItems}
-</channel>
-</rss>`;
+</channel></rss>`;
   await write("feed.xml", rss);
 
-  console.log(`Published articles: ${published.length}`);
+  console.log(\`Published articles: \${publishedSorted.length}\`);
 }
 
 main().catch(err => { console.error(err); process.exit(1); });
