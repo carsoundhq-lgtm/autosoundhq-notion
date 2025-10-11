@@ -1,4 +1,4 @@
-// scripts/generate.js — AutoSoundHQ generator (Wirecutter UI + GA4 + OG/Twitter + RSS + FTC note + Skimlinks wrap)
+// scripts/generate.js — AutoSoundHQ generator (Wirecutter UI + GA4 + OG/Twitter + RSS + FTC note + Skimlinks wrap + PDF Guides)
 // Node >= 18; package.json: { "type": "module" }
 
 import fs from "fs";
@@ -131,6 +131,7 @@ const NAV = `<header class="site-header"><div class="container">
   <a class="logo" href="/"><span>Auto</span>SoundHQ</a>
   <nav>
     <a href="/articles/index.html">Articles</a>
+    <a href="/guides/index.html">Guides (PDF)</a>
     <a href="/about.html">About</a>
     <a href="/contact.html">Contact</a>
     <a href="/disclosure.html">Affiliate Disclosure</a>
@@ -250,12 +251,15 @@ function affiliateURL(name, raw) {
   return raw;
 }
 
-/* ========= Guide block injector ========= */
+/* ========= Guide block injector (more forgiving title matching) ========= */
+function normalize(s){ return (s||"").toLowerCase(); }
+
 function guideBlockForTitle(title) {
-  if (!title) return "";
-  const guides = {
-    "How to Tune a Car Amp": {
-      file: "amp-tuning.pdf",
+  const t = normalize(title);
+
+  const guides = [
+    {
+      match: (s) => /tune.*car.*amp|amp.*tuning/.test(s),
       html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
   <div style="display:flex;flex-wrap:wrap;align-items:center;gap:.75rem;justify-content:space-between;">
     <h2 style="margin:0;">Step-by-Step: Tune Your Amp (Beginner)</h2>
@@ -275,8 +279,8 @@ function guideBlockForTitle(title) {
   </details>
 </div>`
     },
-    "Install a Car Amp": {
-      file: "install-amp-quick-start.pdf",
+    {
+      match: (s) => /install.*car.*amp|amp.*install/.test(s),
       html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
   <h2>Install a Car Amp (Quick Start)</h2>
   <a href="/assets/guides/install-amp-quick-start.pdf" target="_blank" rel="noopener">Download PDF</a>
@@ -288,8 +292,8 @@ function guideBlockForTitle(title) {
   </ul>
 </div>`
     },
-    "Set Crossover Frequencies": {
-      file: "crossover-cheat-sheet.pdf",
+    {
+      match: (s) => /crossover|cross-over|set.*frequency/.test(s),
       html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
   <h2>Set Crossover Frequencies (Cheat Sheet)</h2>
   <a href="/assets/guides/crossover-cheat-sheet.pdf" target="_blank" rel="noopener">Download PDF</a>
@@ -301,8 +305,8 @@ function guideBlockForTitle(title) {
   </ul>
 </div>`
     },
-    "Speaker Polarity": {
-      file: "speaker-polarity-phase-test.pdf",
+    {
+      match: (s) => /polarity|phase.*test/.test(s),
       html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
   <h2>Speaker Polarity & Phase Test</h2>
   <a href="/assets/guides/speaker-polarity-phase-test.pdf" target="_blank" rel="noopener">Download PDF</a>
@@ -313,8 +317,8 @@ function guideBlockForTitle(title) {
   </ul>
 </div>`
     },
-    "Fix Car Audio Noise": {
-      file: "fix-audio-noise.pdf",
+    {
+      match: (s) => /noise|whine|ground.*loop/.test(s),
       html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
   <h2>Fix Car Audio Noise (Ground Loop / Alternator Whine)</h2>
   <a href="/assets/guides/fix-audio-noise.pdf" target="_blank" rel="noopener">Download PDF</a>
@@ -325,8 +329,8 @@ function guideBlockForTitle(title) {
   </ul>
 </div>`
     },
-    "Head Unit Setup": {
-      file: "head-unit-setup-eq.pdf",
+    {
+      match: (s) => /head.*unit|eq|equalizer/.test(s),
       html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
   <h2>Head Unit Setup & EQ (Starter)</h2>
   <a href="/assets/guides/head-unit-setup-eq.pdf" target="_blank" rel="noopener">Download PDF</a>
@@ -337,8 +341,8 @@ function guideBlockForTitle(title) {
   </ul>
 </div>`
     },
-    "Choosing 6.5": {
-      file: "choose-6-5-speakers.pdf",
+    {
+      match: (s) => /6\.?5("|-?inch)?|speakers.*buyer|choose.*speakers/.test(s),
       html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
   <h2>Choosing 6.5&quot; Car Speakers (Buyer’s Guide)</h2>
   <a href="/assets/guides/choose-6-5-speakers.pdf" target="_blank" rel="noopener">Download PDF</a>
@@ -349,10 +353,10 @@ function guideBlockForTitle(title) {
   </ul>
 </div>`
     }
-  };
+  ];
 
-  for (const key of Object.keys(guides)) {
-    if (title.includes(key)) return guides[key].html;
+  for (const g of guides) {
+    if (g.match(t)) return g.html;
   }
   return "";
 }
@@ -371,7 +375,7 @@ async function main() {
   if (fs.existsSync("og-default.jpg"))
     await fsp.copyFile("og-default.jpg", path.join(PUB_DIR, "assets/img/og-default.jpg"));
 
-  // NEW: Copy everything from /assets (e.g., guides/*.pdf)
+  // Copy everything from /assets (e.g., guides/*.pdf)
   if (fs.existsSync("assets")) {
     await copyDir("assets", path.join(PUB_DIR, "assets"));
   }
@@ -440,7 +444,7 @@ async function main() {
       </section>`;
     }
 
-    // NEW: Insert guide block at top (if the title matches)
+    // Insert guide block at top (if the title matches)
     const guideBlock = guideBlockForTitle(title);
 
     const body = `<main class="container article">
@@ -534,6 +538,35 @@ async function main() {
     og: { type:"website", title:SITE_NAME, desc:`Expert, no-fluff car audio picks.`, url:SITE_URL, image:`${SITE_URL}/assets/img/og-default.jpg` }
   }));
 
+  // === Guides Index (lists all PDFs found under assets/guides) ===
+  let guidesList = "";
+  const guidesSrcDir = "assets/guides";
+  const guidesPubDir = "/assets/guides";
+  if (fs.existsSync(guidesSrcDir)) {
+    const files = (await fsp.readdir(guidesSrcDir)).filter(n => /\.pdf$/i.test(n));
+    if (files.length) {
+      guidesList = files.map(fn => {
+        const nice = fn
+          .replace(/[_-]+/g, " ")
+          .replace(/\.pdf$/i, "")
+          .replace(/\b(\w)/g, (m) => m.toUpperCase());
+        return `<li><a href="${guidesPubDir}/${fn}" target="_blank" rel="noopener">${nice}</a></li>`;
+      }).join("");
+    }
+  }
+  const guidesBody = `<main class="container">
+    <h1>Guides (PDF)</h1>
+    <p class="muted">Printable quick-start guides and cheat sheets.</p>
+    ${guidesList ? `<ul class="guides-list">${guidesList}</ul>` : `<p>No PDF guides found yet.</p>`}
+  </main>`;
+
+  await write("guides/index.html", pageLayout({
+    title: `Guides (PDF) — ${SITE_NAME}`,
+    desc: `Printable quick-start guides and cheat sheets from ${SITE_NAME}.`,
+    body: guidesBody,
+    og: { type:"website", title:`Guides (PDF) — ${SITE_NAME}`, desc:`Printable quick-start guides and cheat sheets.`, url:`${SITE_URL}/guides/`, image:`${SITE_URL}/assets/img/og-default.jpg` }
+  }));
+
   // Legal pages
   const legal = (t,b)=>pageLayout({
     title:`${t} — ${SITE_NAME}`, desc:t,
@@ -548,7 +581,7 @@ async function main() {
 
   // robots + sitemap
   await write("robots.txt", `User-agent: *\nAllow: /\nSitemap: ${SITE_URL}/sitemap.xml\n`);
-  const urls = ["/", "/articles/index.html",
+  const urls = ["/", "/articles/index.html", "/guides/index.html",
     ...publishedSorted.map(p => `/articles/${p.slug}.html`),
     "/about.html","/contact.html","/disclosure.html","/privacy.html","/terms.html"];
   await write("sitemap.xml",
