@@ -30,15 +30,33 @@ const TPL_DIR = "templates";
 
 /* ========= fs helpers ========= */
 const ensureDir = (p) => fsp.mkdir(p, { recursive: true });
+
 const write = async (rel, content) => {
   const full = path.join(PUB_DIR, rel);
   await ensureDir(path.dirname(full));
   await fsp.writeFile(full, content, "utf8");
 };
+
 const read = (f, fallback = "") => {
   const p = path.join(TPL_DIR, f);
   return fs.existsSync(p) ? fs.readFileSync(p, "utf8") : fallback;
 };
+
+// Recursively copy a folder (keeps your assets like PDFs)
+async function copyDir(src, dest) {
+  if (!fs.existsSync(src)) return;
+  const entries = await fsp.readdir(src, { withFileTypes: true });
+  await ensureDir(dest);
+  for (const e of entries) {
+    const s = path.join(src, e.name);
+    const d = path.join(dest, e.name);
+    if (e.isDirectory()) {
+      await copyDir(s, d);
+    } else {
+      await fsp.copyFile(s, d);
+    }
+  }
+}
 
 /* ========= HTML shells (GA4 beacon + OG/Twitter) ========= */
 const YEAR = new Date().getFullYear();
@@ -71,6 +89,7 @@ gtag('js', new Date());
 gtag('config','${GA4}', { transport_type: 'beacon' });
 // gtag('set','debug_mode',true);
 
+// Track affiliate clicks from product buttons
 function sendAffiliateEvent(name, href){
   try {
     gtag('event','affiliate_click',{
@@ -231,17 +250,131 @@ function affiliateURL(name, raw) {
   return raw;
 }
 
+/* ========= Guide block injector ========= */
+function guideBlockForTitle(title) {
+  if (!title) return "";
+  const guides = {
+    "How to Tune a Car Amp": {
+      file: "amp-tuning.pdf",
+      html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
+  <div style="display:flex;flex-wrap:wrap;align-items:center;gap:.75rem;justify-content:space-between;">
+    <h2 style="margin:0;">Step-by-Step: Tune Your Amp (Beginner)</h2>
+    <a href="/assets/guides/amp-tuning.pdf" target="_blank" rel="noopener"
+       class="btn" style="padding:.6rem 1rem;border-radius:10px;border:1px solid #555;">Download PDF</a>
+  </div>
+  <details open style="margin-top:.75rem;">
+    <summary style="cursor:pointer;font-weight:600;">Show/Hide quick steps</summary>
+    <ol style="margin-top:.5rem;line-height:1.6">
+      <li><strong>Prep:</strong> EQ flat, loudness OFF, amp gains fully down.</li>
+      <li><strong>Crossovers:</strong> HPF (front/rear) 80 Hz; LPF (sub) 80 Hz. Subsonic: sealed 20 Hz / ported ~3–5 Hz below tuning.</li>
+      <li><strong>Set gains:</strong> Play 1 kHz (speakers) / 40 Hz (sub) tone; set head unit ~80% max; raise gain to just before distortion, then back off.</li>
+      <li><strong>Fine-tune:</strong> Bass-boost 0–3 dB max; adjust HPF/LPF overlap.</li>
+      <li><strong>Balance:</strong> Center vocals; trim sub so it doesn’t mask vocals.</li>
+      <li><strong>Quick starts:</strong> HPF 80 Hz • LPF 80 Hz • 12 dB/oct • Vol 75–85%.</li>
+    </ol>
+  </details>
+</div>`
+    },
+    "Install a Car Amp": {
+      file: "install-amp-quick-start.pdf",
+      html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
+  <h2>Install a Car Amp (Quick Start)</h2>
+  <a href="/assets/guides/install-amp-quick-start.pdf" target="_blank" rel="noopener">Download PDF</a>
+  <ul>
+    <li>Disconnect negative battery; mount amp with airflow.</li>
+    <li>Battery → fuse (12–18") → power wire → amp. Ground &lt; 18" to bare metal.</li>
+    <li>RCAs on opposite side from power; connect REM.</li>
+    <li>Power up (protect OFF), set gains to minimum, then follow tuning guide.</li>
+  </ul>
+</div>`
+    },
+    "Set Crossover Frequencies": {
+      file: "crossover-cheat-sheet.pdf",
+      html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
+  <h2>Set Crossover Frequencies (Cheat Sheet)</h2>
+  <a href="/assets/guides/crossover-cheat-sheet.pdf" target="_blank" rel="noopener">Download PDF</a>
+  <ul>
+    <li>HPF (speakers): 80–100 Hz</li>
+    <li>LPF (sub): 70–90 Hz</li>
+    <li>Subsonic: 20 Hz sealed / 30–35 Hz ported</li>
+    <li>12 dB/oct for overlap, 24 dB/oct for tighter handoff</li>
+  </ul>
+</div>`
+    },
+    "Speaker Polarity": {
+      file: "speaker-polarity-phase-test.pdf",
+      html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
+  <h2>Speaker Polarity & Phase Test</h2>
+  <a href="/assets/guides/speaker-polarity-phase-test.pdf" target="_blank" rel="noopener">Download PDF</a>
+  <ul>
+    <li>9V battery pop test: cone OUT = correct polarity.</li>
+    <li>Polarity track: centered vocals = correct phase.</li>
+    <li>Flip sub polarity if bass cancels near crossover.</li>
+  </ul>
+</div>`
+    },
+    "Fix Car Audio Noise": {
+      file: "fix-audio-noise.pdf",
+      html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
+  <h2>Fix Car Audio Noise (Ground Loop / Alternator Whine)</h2>
+  <a href="/assets/guides/fix-audio-noise.pdf" target="_blank" rel="noopener">Download PDF</a>
+  <ul>
+    <li>Separate power and signal runs.</li>
+    <li>Ground short to bare metal (&lt; 18").</li>
+    <li>Noise with RPM → alternator whine; try new ground point.</li>
+  </ul>
+</div>`
+    },
+    "Head Unit Setup": {
+      file: "head-unit-setup-eq.pdf",
+      html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
+  <h2>Head Unit Setup & EQ (Starter)</h2>
+  <a href="/assets/guides/head-unit-setup-eq.pdf" target="_blank" rel="noopener">Download PDF</a>
+  <ul>
+    <li>Turn OFF loudness/surround/enhancers.</li>
+    <li>EQ flat; set reference volume to 75–85%.</li>
+    <li>Cut harshness first; boost sparingly.</li>
+  </ul>
+</div>`
+    },
+    "Choosing 6.5": {
+      file: "choose-6-5-speakers.pdf",
+      html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
+  <h2>Choosing 6.5&quot; Car Speakers (Buyer’s Guide)</h2>
+  <a href="/assets/guides/choose-6-5-speakers.pdf" target="_blank" rel="noopener">Download PDF</a>
+  <ul>
+    <li>High sensitivity = louder per watt.</li>
+    <li>Match RMS to amp power.</li>
+    <li>Coaxial = easy install; Components = better imaging.</li>
+  </ul>
+</div>`
+    }
+  };
+
+  for (const key of Object.keys(guides)) {
+    if (title.includes(key)) return guides[key].html;
+  }
+  return "";
+}
+
 /* ========= MAIN ========= */
 async function main() {
   // assets
   await ensureDir(path.join(PUB_DIR, "assets/css"));
   await ensureDir(path.join(PUB_DIR, "assets/img"));
+
+  // Copy core assets if present
   if (fs.existsSync("styles.css"))
     await fsp.copyFile("styles.css", path.join(PUB_DIR, "assets/css/styles.css"));
   if (fs.existsSync("favicon.ico"))
     await fsp.copyFile("favicon.ico", path.join(PUB_DIR, "assets/img/favicon.ico"));
   if (fs.existsSync("og-default.jpg"))
     await fsp.copyFile("og-default.jpg", path.join(PUB_DIR, "assets/img/og-default.jpg"));
+
+  // NEW: Copy everything from /assets (e.g., guides/*.pdf)
+  if (fs.existsSync("assets")) {
+    await copyDir("assets", path.join(PUB_DIR, "assets"));
+  }
 
   // PRODUCTS
   const productsMap = {};
@@ -307,12 +440,16 @@ async function main() {
       </section>`;
     }
 
+    // NEW: Insert guide block at top (if the title matches)
+    const guideBlock = guideBlockForTitle(title);
+
     const body = `<main class="container article">
       <header class="article-head">
         <h1>${title}</h1>
         ${dateStr ? `<p class="muted small">${dateStr}</p>` : ""}
         ${desc ? `<p class="lead">${desc}</p>` : ""}
       </header>
+      ${guideBlock || ""}
     </main>
     ${cards}`;
 
