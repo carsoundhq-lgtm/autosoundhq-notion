@@ -14,10 +14,11 @@ jobs:
     permissions:
       contents: write
 
-    # ⬇️ Inject your repository secrets as environment variables
+    # Secrets → Env
     env:
       SITE_NAME:              ${{ secrets.SITE_NAME }}
       SITE_URL:               ${{ secrets.SITE_URL }}
+      SITE_DESC:              ${{ secrets.SITE_DESC }}         # (optional) add in repo secrets
       SKIMLINKS_PUB_ID:       ${{ secrets.SKIMLINKS_PUB_ID }}
       GA4_MEASUREMENT_ID:     ${{ secrets.GA4_MEASUREMENT_ID }}
       AMAZON_TRACKING_ID:     ${{ secrets.AMAZON_TRACKING_ID }}
@@ -26,7 +27,6 @@ jobs:
       NOTION_DB_PRODUCTS:     ${{ secrets.NOTION_DB_PRODUCTS }}
       NOTION_DB_KEYWORDS:     ${{ secrets.NOTION_DB_KEYWORDS }}
       BREVO_FORM_URL:         ${{ secrets.BREVO_FORM_URL }}
-
 
     steps:
       - name: Checkout
@@ -46,6 +46,24 @@ jobs:
 
       - name: Install deps
         run: npm ci || npm i
+
+      - name: Inject environment variables
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # GA4 + Skimlinks + Title (safe with / delimiter)
+          find . -type f -name "*.html" -exec sed -i "s/{{GA4}}/${GA4_MEASUREMENT_ID}/g" {} +
+          find . -type f -name "*.html" -exec sed -i "s/{{SKIM}}/${SKIMLINKS_PUB_ID}/g" {} +
+          find . -type f -name "*.html" -exec sed -i "s/{{TITLE}}/${SITE_NAME}/g" {} +
+
+          # Description may contain URLs/punctuation → use | delimiter so slashes don't break sed.
+          # If SITE_DESC isn't set, this will replace {{DESC}} with empty (that's fine).
+          find . -type f -name "*.html" -exec sed -i "s|{{DESC}}|${SITE_DESC}|g" {} +
+
+          # Optional: uncomment if you have these placeholders in your templates
+          # find . -type f -name "*.html" -exec sed -i "s/{{AMZN}}/${AMAZON_TRACKING_ID}/g" {} +
+          # find . -type f -name "*.html" -exec sed -i "s|{{BREVO_FORM_URL}}|${BREVO_FORM_URL}|g" {} +
 
       - name: Build static site from Notion
         run: npm run build
