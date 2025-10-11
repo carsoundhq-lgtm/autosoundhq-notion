@@ -58,6 +58,10 @@ main .container{padding:28px 16px}
 .card .meta{font-size:13px;color:var(--muted);margin:0 0 6px}
 .card .btn{padding:8px 12px;border-radius:10px;border:1px solid var(--brand-2);background:linear-gradient(180deg, var(--brand) 0%, var(--brand-2) 100%);color:#0b0c10;font-weight:700}
 
+.small{font-size:13px}
+.muted{color:var(--muted)}
+.ftc{margin-top:6px}
+
 /* Footer */
 .site-footer{border-top:1px solid var(--border);margin-top:24px}
 .site-footer .container{padding:18px 16px}
