@@ -437,7 +437,7 @@ async function main() {
 </channel></rss>`;
   await write("feed.xml", rss);
 
-  console.log(\`Published articles: \${publishedSorted.length}\`);
+  console.log(`Published articles: ${publishedSorted.length}`);
 }
 
 main().catch(err => { console.error(err); process.exit(1); });
