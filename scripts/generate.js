@@ -486,6 +486,12 @@ async function main() {
   await write("privacy.html",    legal("Privacy Policy", `<p>We use Google Analytics to improve our content.</p>`));
   await write("terms.html",      legal("Terms of Use", `<p>All content is for informational purposes only.</p>`));
 
+  // === IndexNow key file at site root (optional; enables Bing/IndexNow ping auth)
+  // If you set the repo secret INDEXNOW_KEY, this writes /<INDEXNOW_KEY>.txt with the key as its contents.
+  if (process.env.INDEXNOW_KEY) {
+    await write(`${process.env.INDEXNOW_KEY}.txt`, process.env.INDEXNOW_KEY + "\n");
+  }
+
   // robots + sitemap
   await write("robots.txt", `User-agent: *\nAllow: /\nSitemap: ${SITE_URL}/sitemap.xml\n`);
   const urls = ["/", "/articles/index.html",
