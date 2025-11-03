@@ -1,4 +1,4 @@
-// scripts/generate.js — AutoSoundHQ generator (Wirecutter UI + GA4 + OG/Twitter + RSS + FTC note + Skimlinks/Amazon wrap)
+// scripts/generate.js — AutoSoundHQ generator with Related Guides + FAQ/HowTo schema
 // Node >= 18; package.json: { "type": "module" }
 
 import fs from "fs";
@@ -41,7 +41,7 @@ const read = (f, fallback = "") => {
   return fs.existsSync(p) ? fs.readFileSync(p, "utf8") : fallback;
 };
 
-/* ========= HTML shells (GA4 beacon + OG/Twitter) ========= */
+/* ========= HTML shells ========= */
 const YEAR = new Date().getFullYear();
 
 const HEAD = `<!doctype html><html lang="en"><head>
@@ -50,6 +50,9 @@ const HEAD = `<!doctype html><html lang="en"><head>
 <link rel="stylesheet" href="/assets/css/styles.css"/>
 <title>{{TITLE}}</title>
 <meta name="description" content="{{DESC}}"/>
+
+<!-- Canonical -->
+<link rel="canonical" href="{{OG_URL}}"/>
 
 <!-- Open Graph -->
 <meta property="og:type" content="{{OG_TYPE}}">
@@ -210,8 +213,21 @@ async function fetchAll(dbId) {
   return out;
 }
 
+/* ========= Simple related selection ========= */
+const STOP = new Set(["the","a","an","for","and","to","of","in","on","with","how","best","guide"]);
+function tokens(s) {
+  return (s||"").toLowerCase().split(/[^a-z0-9]+/).filter(w => w && !STOP.has(w));
+}
+function similarity(aTitle, bTitle) {
+  const A = new Set(tokens(aTitle));
+  const B = new Set(tokens(bTitle));
+  let inter = 0;
+  for (const w of A) if (B.has(w)) inter++;
+  const denom = Math.max(1, A.size + B.size - inter);
+  return inter / denom;
+}
+
 /* ========= Affiliate link builder ========= */
-// Amazon → search link with tag (never 404). Crutchfield/Sonic → leave as-is. Others → Skimlinks wrap.
 function affiliateURL(name, raw) {
   if (!raw) raw = "";
   const isAmazon = /(^https?:\/\/)?([a-z0-9.-]*\.)?amazon\./i.test(raw) || /amazon/i.test(name);
@@ -259,38 +275,44 @@ async function main() {
     }
   }
 
-  // ARTICLES
-  const pages = await fetchAll(DB_ARTICLES);
-  const published = [];
-
-  for (const page of pages) {
+  // FIRST PASS — collect published meta
+  const pagesAll = await fetchAll(DB_ARTICLES);
+  const pagesPub = [];
+  for (const page of pagesAll) {
     const props = page.properties || {};
+    if (!isPublished(props)) continue;
     const title = firstTitle(props);
     const slug  = slugFrom(props);
-    const pub   = isPublished(props);
-    if (!pub) continue;
-
-    const desc = textFrom(getByNameCI(props, ["description","intro","summary","Description"], ["rich_text","title"]));
-    const rel  = getByNameCI(props, ["products","Products"], ["relation"]);
-    const ids  = relIds(rel);
+    const desc  = textFrom(getByNameCI(props, ["description","intro","summary","Description"], ["rich_text","title"]));
     const dateVal = dateFrom(props);
     const dateStr = dateVal ? dateVal.toLocaleDateString(undefined, {year:"numeric",month:"short",day:"2-digit"}) : "";
+    const rel  = getByNameCI(props, ["products","Products"], ["relation"]);
+    const ids  = relIds(rel);
+    pagesPub.push({ id: page.id, title, slug, desc, dateVal, dateStr, productIds: ids });
+  }
+
+  // Sort newest first for index later
+  const publishedSorted = pagesPub.slice().sort((a,b)=> (b.dateVal?.getTime()||0) - (a.dateVal?.getTime()||0));
+
+  // SECOND PASS — write each article with Related + schema
+  for (const meta of pagesPub) {
+    const { title, slug, desc, dateVal, dateStr, productIds } = meta;
 
     // Product cards
     let cards = "";
-    if (ids.length) {
-      const cardHTML = ids.map(id => {
+    if (productIds.length) {
+      const cardHTML = productIds.map(id => {
         const pr = productsMap[id] || {};
         const name = pr.name || "Product";
         const href = affiliateURL(name, pr.link || "");
         const img  = pr.img || "";
-        const meta = [pr.brand, pr.price].filter(Boolean).join(" • ");
+        const metaLine = [pr.brand, pr.price].filter(Boolean).join(" • ");
         const safeDesc = pr.desc || "";
         return `<article class="card">
           ${img ? `<div class="thumb"><img loading="lazy" src="${img}" alt="${name}"></div>` : ""}
           <div class="card-body">
             <h3>${name}</h3>
-            ${meta ? `<p class="meta">${meta}</p>` : ""}
+            ${metaLine ? `<p class="meta">${metaLine}</p>` : ""}
             ${safeDesc ? `<p class="excerpt">${safeDesc}</p>` : ""}
             <p><a class="btn" href="${href}" target="_blank" rel="sponsored noopener" aria-label="View ${name}">View</a></p>
             <p class="ftc small muted">We may earn a commission at no extra cost to you.</p>
@@ -307,8 +329,75 @@ async function main() {
       </section>`;
     }
 
-    // --------- NEW: Insert AI tutorial content ----------
-    const guideHTML = generateGuideContent(title);
+    // AI content (+ structured data parts)
+    const ai = generateGuideContent(title);
+    const guideHTML = ai.html;
+
+    // Related Guides (by simple title similarity; fallback to newest others)
+    const others = pagesPub.filter(p => p.slug !== slug);
+    let related = others
+      .map(p => ({ ...p, sim: similarity(title, p.title) }))
+      .sort((a,b)=> b.sim - a.sim || ((b.dateVal?.getTime()||0) - (a.dateVal?.getTime()||0)))
+      .slice(0,3);
+
+    if (!related.length) {
+      related = publishedSorted.filter(p => p.slug !== slug).slice(0,3);
+    }
+
+    const relatedHTML = related.length ? `
+<section class="related">
+  <div class="container">
+    <h2>Related Guides</h2>
+    <ul class="related-list">
+      ${related.map(r => `<li><a href="/articles/${r.slug}.html">${r.title}</a></li>`).join("")}
+    </ul>
+  </div>
+</section>` : "";
+
+    // Build JSON-LD (Article + FAQPage + HowTo)
+    const articleUrl = `${SITE_URL}/articles/${slug}.html`;
+    const ogImage =
+      (productIds.length && productsMap[productIds[0]]?.img)
+        ? productsMap[productIds[0]].img
+        : `${SITE_URL}/assets/img/og-default.jpg`;
+
+    const articleLD = {
+      "@context": "https://schema.org",
+      "@type": "Article",
+      "headline": title,
+      "description": desc || "",
+      "mainEntityOfPage": articleUrl,
+      "datePublished": dateVal ? dateVal.toISOString() : undefined,
+      "publisher": { "@type":"Organization", "name": SITE_NAME }
+    };
+
+    const faqLD = ai.faqItems?.length ? {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": ai.faqItems.map(f => ({
+        "@type": "Question",
+        "name": f.q,
+        "acceptedAnswer": { "@type": "Answer", "text": f.a }
+      }))
+    } : null;
+
+    const howtoLD = ai.howtoSteps?.length ? {
+      "@context": "https://schema.org",
+      "@type": "HowTo",
+      "name": title,
+      "totalTime": "PT20M",
+      "step": ai.howtoSteps.map((s, i) => ({
+        "@type": "HowToStep",
+        "position": i+1,
+        "name": s.name,
+        "text": s.text
+      }))
+    } : null;
+
+    const jsonBlocks = [articleLD, faqLD, howtoLD].filter(Boolean);
+    const jsonld = jsonBlocks.map(obj =>
+      `<script type="application/ld+json">${JSON.stringify(obj)}</script>`
+    ).join("\n");
 
     const body = `<main class="container article">
       <header class="article-head">
@@ -320,35 +409,17 @@ async function main() {
       ${guideHTML}
 
     </main>
-    ${cards}`;
-
-    const ogImage = (ids.length && productsMap[ids[0]]?.img)
-      ? productsMap[ids[0]].img
-      : `${SITE_URL}/assets/img/og-default.jpg`;
-
-    const jsonld = `<script type="application/ld+json">${JSON.stringify({
-      "@context":"https://schema.org",
-      "@type":"Article",
-      "headline": title,
-      "description": desc || "",
-      "mainEntityOfPage": `${SITE_URL}/articles/${slug}.html`,
-      "datePublished": dateVal ? dateVal.toISOString() : undefined,
-      "publisher": { "@type":"Organization", "name": SITE_NAME }
-    })}</script>`;
+    ${cards}
+    ${relatedHTML}`;
 
     await write(`articles/${slug}.html`, pageLayout({
       title: `${title} — ${SITE_NAME}`,
       desc,
       body,
       jsonld,
-      og: { type:"article", title, desc, url:`${SITE_URL}/articles/${slug}.html`, image: ogImage }
+      og: { type:"article", title, desc, url: articleUrl, image: ogImage }
     }));
-
-    published.push({ title, slug, desc, ogImage, dateStr });
   }
-
-  // Sort newest first
-  const publishedSorted = published.slice().reverse();
 
   // Articles index
   const articleCards = publishedSorted.map(p => `
@@ -365,7 +436,7 @@ async function main() {
     title: `${SITE_NAME} Articles`,
     desc: `All ${SITE_NAME} guides and product roundups.`,
     body: `<main class="container"><h1>Articles & Guides</h1><div class="postlist">${articleCards}</div></main>`,
-    og: { type:"website", title:`${SITE_NAME} Articles`, desc:`All ${SITE_NAME} guides and product roundups.`, url:`${SITE_URL}/articles/`, image:`${SITE_URL}/assets/img/og-default.jpg` }
+    og: { type:"website", title:`${SITE_NAME} Articles`, desc:`All ${SITE_NAME} guides and product roundups.`, url:`${SITE_URL}/articles/index.html`, image:`${SITE_URL}/assets/img/og-default.jpg` }
   }));
 
   // Home
