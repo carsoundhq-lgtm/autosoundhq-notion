@@ -1,10 +1,11 @@
-// scripts/generate.js — AutoSoundHQ generator (Wirecutter UI + GA4 + OG/Twitter + RSS + FTC note + Skimlinks wrap + PDF Guides)
+// scripts/generate.js — AutoSoundHQ generator (Wirecutter UI + GA4 + OG/Twitter + RSS + FTC note + Skimlinks/Amazon wrap)
 // Node >= 18; package.json: { "type": "module" }
 
 import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
 import { Client } from "@notionhq/client";
+import { generateGuideContent } from "./aiContent.js";
 
 /* ========= ENV ========= */
 const SITE_NAME      = process.env.SITE_NAME || "AutoSoundHQ";
@@ -30,33 +31,15 @@ const TPL_DIR = "templates";
 
 /* ========= fs helpers ========= */
 const ensureDir = (p) => fsp.mkdir(p, { recursive: true });
-
 const write = async (rel, content) => {
   const full = path.join(PUB_DIR, rel);
   await ensureDir(path.dirname(full));
   await fsp.writeFile(full, content, "utf8");
 };
-
 const read = (f, fallback = "") => {
   const p = path.join(TPL_DIR, f);
   return fs.existsSync(p) ? fs.readFileSync(p, "utf8") : fallback;
 };
-
-// Recursively copy a folder (keeps your assets like PDFs)
-async function copyDir(src, dest) {
-  if (!fs.existsSync(src)) return;
-  const entries = await fsp.readdir(src, { withFileTypes: true });
-  await ensureDir(dest);
-  for (const e of entries) {
-    const s = path.join(src, e.name);
-    const d = path.join(dest, e.name);
-    if (e.isDirectory()) {
-      await copyDir(s, d);
-    } else {
-      await fsp.copyFile(s, d);
-    }
-  }
-}
 
 /* ========= HTML shells (GA4 beacon + OG/Twitter) ========= */
 const YEAR = new Date().getFullYear();
@@ -87,9 +70,7 @@ window.dataLayer = window.dataLayer || [];
 function gtag(){dataLayer.push(arguments);}
 gtag('js', new Date());
 gtag('config','${GA4}', { transport_type: 'beacon' });
-// gtag('set','debug_mode',true);
 
-// Track affiliate clicks from product buttons
 function sendAffiliateEvent(name, href){
   try {
     gtag('event','affiliate_click',{
@@ -131,7 +112,6 @@ const NAV = `<header class="site-header"><div class="container">
   <a class="logo" href="/"><span>Auto</span>SoundHQ</a>
   <nav>
     <a href="/articles/index.html">Articles</a>
-    <a href="/guides/index.html">Guides (PDF)</a>
     <a href="/about.html">About</a>
     <a href="/contact.html">Contact</a>
     <a href="/disclosure.html">Affiliate Disclosure</a>
@@ -251,134 +231,17 @@ function affiliateURL(name, raw) {
   return raw;
 }
 
-/* ========= Guide block injector (more forgiving title matching) ========= */
-function normalize(s){ return (s||"").toLowerCase(); }
-
-function guideBlockForTitle(title) {
-  const t = normalize(title);
-
-  const guides = [
-    {
-      match: (s) => /tune.*car.*amp|amp.*tuning/.test(s),
-      html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
-  <div style="display:flex;flex-wrap:wrap;align-items:center;gap:.75rem;justify-content:space-between;">
-    <h2 style="margin:0;">Step-by-Step: Tune Your Amp (Beginner)</h2>
-    <a href="/assets/guides/amp-tuning.pdf" target="_blank" rel="noopener"
-       class="btn" style="padding:.6rem 1rem;border-radius:10px;border:1px solid #555;">Download PDF</a>
-  </div>
-  <details open style="margin-top:.75rem;">
-    <summary style="cursor:pointer;font-weight:600;">Show/Hide quick steps</summary>
-    <ol style="margin-top:.5rem;line-height:1.6">
-      <li><strong>Prep:</strong> EQ flat, loudness OFF, amp gains fully down.</li>
-      <li><strong>Crossovers:</strong> HPF (front/rear) 80 Hz; LPF (sub) 80 Hz. Subsonic: sealed 20 Hz / ported ~3–5 Hz below tuning.</li>
-      <li><strong>Set gains:</strong> Play 1 kHz (speakers) / 40 Hz (sub) tone; set head unit ~80% max; raise gain to just before distortion, then back off.</li>
-      <li><strong>Fine-tune:</strong> Bass-boost 0–3 dB max; adjust HPF/LPF overlap.</li>
-      <li><strong>Balance:</strong> Center vocals; trim sub so it doesn’t mask vocals.</li>
-      <li><strong>Quick starts:</strong> HPF 80 Hz • LPF 80 Hz • 12 dB/oct • Vol 75–85%.</li>
-    </ol>
-  </details>
-</div>`
-    },
-    {
-      match: (s) => /install.*car.*amp|amp.*install/.test(s),
-      html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
-  <h2>Install a Car Amp (Quick Start)</h2>
-  <a href="/assets/guides/install-amp-quick-start.pdf" target="_blank" rel="noopener">Download PDF</a>
-  <ul>
-    <li>Disconnect negative battery; mount amp with airflow.</li>
-    <li>Battery → fuse (12–18") → power wire → amp. Ground &lt; 18" to bare metal.</li>
-    <li>RCAs on opposite side from power; connect REM.</li>
-    <li>Power up (protect OFF), set gains to minimum, then follow tuning guide.</li>
-  </ul>
-</div>`
-    },
-    {
-      match: (s) => /crossover|cross-over|set.*frequency/.test(s),
-      html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
-  <h2>Set Crossover Frequencies (Cheat Sheet)</h2>
-  <a href="/assets/guides/crossover-cheat-sheet.pdf" target="_blank" rel="noopener">Download PDF</a>
-  <ul>
-    <li>HPF (speakers): 80–100 Hz</li>
-    <li>LPF (sub): 70–90 Hz</li>
-    <li>Subsonic: 20 Hz sealed / 30–35 Hz ported</li>
-    <li>12 dB/oct for overlap, 24 dB/oct for tighter handoff</li>
-  </ul>
-</div>`
-    },
-    {
-      match: (s) => /polarity|phase.*test/.test(s),
-      html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
-  <h2>Speaker Polarity & Phase Test</h2>
-  <a href="/assets/guides/speaker-polarity-phase-test.pdf" target="_blank" rel="noopener">Download PDF</a>
-  <ul>
-    <li>9V battery pop test: cone OUT = correct polarity.</li>
-    <li>Polarity track: centered vocals = correct phase.</li>
-    <li>Flip sub polarity if bass cancels near crossover.</li>
-  </ul>
-</div>`
-    },
-    {
-      match: (s) => /noise|whine|ground.*loop/.test(s),
-      html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
-  <h2>Fix Car Audio Noise (Ground Loop / Alternator Whine)</h2>
-  <a href="/assets/guides/fix-audio-noise.pdf" target="_blank" rel="noopener">Download PDF</a>
-  <ul>
-    <li>Separate power and signal runs.</li>
-    <li>Ground short to bare metal (&lt; 18").</li>
-    <li>Noise with RPM → alternator whine; try new ground point.</li>
-  </ul>
-</div>`
-    },
-    {
-      match: (s) => /head.*unit|eq|equalizer/.test(s),
-      html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
-  <h2>Head Unit Setup & EQ (Starter)</h2>
-  <a href="/assets/guides/head-unit-setup-eq.pdf" target="_blank" rel="noopener">Download PDF</a>
-  <ul>
-    <li>Turn OFF loudness/surround/enhancers.</li>
-    <li>EQ flat; set reference volume to 75–85%.</li>
-    <li>Cut harshness first; boost sparingly.</li>
-  </ul>
-</div>`
-    },
-    {
-      match: (s) => /6\.?5("|-?inch)?|speakers.*buyer|choose.*speakers/.test(s),
-      html: `<div class="guide card" style="margin-block:1.5rem;padding:1rem;border-radius:12px;">
-  <h2>Choosing 6.5&quot; Car Speakers (Buyer’s Guide)</h2>
-  <a href="/assets/guides/choose-6-5-speakers.pdf" target="_blank" rel="noopener">Download PDF</a>
-  <ul>
-    <li>High sensitivity = louder per watt.</li>
-    <li>Match RMS to amp power.</li>
-    <li>Coaxial = easy install; Components = better imaging.</li>
-  </ul>
-</div>`
-    }
-  ];
-
-  for (const g of guides) {
-    if (g.match(t)) return g.html;
-  }
-  return "";
-}
-
 /* ========= MAIN ========= */
 async function main() {
   // assets
   await ensureDir(path.join(PUB_DIR, "assets/css"));
   await ensureDir(path.join(PUB_DIR, "assets/img"));
-
-  // Copy core assets if present
   if (fs.existsSync("styles.css"))
     await fsp.copyFile("styles.css", path.join(PUB_DIR, "assets/css/styles.css"));
   if (fs.existsSync("favicon.ico"))
     await fsp.copyFile("favicon.ico", path.join(PUB_DIR, "assets/img/favicon.ico"));
   if (fs.existsSync("og-default.jpg"))
     await fsp.copyFile("og-default.jpg", path.join(PUB_DIR, "assets/img/og-default.jpg"));
-
-  // Copy everything from /assets (e.g., guides/*.pdf)
-  if (fs.existsSync("assets")) {
-    await copyDir("assets", path.join(PUB_DIR, "assets"));
-  }
 
   // PRODUCTS
   const productsMap = {};
@@ -444,8 +307,8 @@ async function main() {
       </section>`;
     }
 
-    // Insert guide block at top (if the title matches)
-    const guideBlock = guideBlockForTitle(title);
+    // --------- NEW: Insert AI tutorial content ----------
+    const guideHTML = generateGuideContent(title);
 
     const body = `<main class="container article">
       <header class="article-head">
@@ -453,7 +316,9 @@ async function main() {
         ${dateStr ? `<p class="muted small">${dateStr}</p>` : ""}
         ${desc ? `<p class="lead">${desc}</p>` : ""}
       </header>
-      ${guideBlock || ""}
+
+      ${guideHTML}
+
     </main>
     ${cards}`;
 
@@ -538,35 +403,6 @@ async function main() {
     og: { type:"website", title:SITE_NAME, desc:`Expert, no-fluff car audio picks.`, url:SITE_URL, image:`${SITE_URL}/assets/img/og-default.jpg` }
   }));
 
-  // === Guides Index (lists all PDFs found under assets/guides) ===
-  let guidesList = "";
-  const guidesSrcDir = "assets/guides";
-  const guidesPubDir = "/assets/guides";
-  if (fs.existsSync(guidesSrcDir)) {
-    const files = (await fsp.readdir(guidesSrcDir)).filter(n => /\.pdf$/i.test(n));
-    if (files.length) {
-      guidesList = files.map(fn => {
-        const nice = fn
-          .replace(/[_-]+/g, " ")
-          .replace(/\.pdf$/i, "")
-          .replace(/\b(\w)/g, (m) => m.toUpperCase());
-        return `<li><a href="${guidesPubDir}/${fn}" target="_blank" rel="noopener">${nice}</a></li>`;
-      }).join("");
-    }
-  }
-  const guidesBody = `<main class="container">
-    <h1>Guides (PDF)</h1>
-    <p class="muted">Printable quick-start guides and cheat sheets.</p>
-    ${guidesList ? `<ul class="guides-list">${guidesList}</ul>` : `<p>No PDF guides found yet.</p>`}
-  </main>`;
-
-  await write("guides/index.html", pageLayout({
-    title: `Guides (PDF) — ${SITE_NAME}`,
-    desc: `Printable quick-start guides and cheat sheets from ${SITE_NAME}.`,
-    body: guidesBody,
-    og: { type:"website", title:`Guides (PDF) — ${SITE_NAME}`, desc:`Printable quick-start guides and cheat sheets.`, url:`${SITE_URL}/guides/`, image:`${SITE_URL}/assets/img/og-default.jpg` }
-  }));
-
   // Legal pages
   const legal = (t,b)=>pageLayout({
     title:`${t} — ${SITE_NAME}`, desc:t,
@@ -581,7 +417,7 @@ async function main() {
 
   // robots + sitemap
   await write("robots.txt", `User-agent: *\nAllow: /\nSitemap: ${SITE_URL}/sitemap.xml\n`);
-  const urls = ["/", "/articles/index.html", "/guides/index.html",
+  const urls = ["/", "/articles/index.html",
     ...publishedSorted.map(p => `/articles/${p.slug}.html`),
     "/about.html","/contact.html","/disclosure.html","/privacy.html","/terms.html"];
   await write("sitemap.xml",
