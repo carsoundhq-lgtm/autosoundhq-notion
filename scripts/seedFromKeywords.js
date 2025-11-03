@@ -1,111 +1,201 @@
 // scripts/seedFromKeywords.js
-// Creates one new Notion article per run from the Keywords DB and marks the keyword as Used.
+// Create a new Article row from the first unused Keyword row,
+// auto-mapping your Articles DB properties (no hard-coded names).
 
 import { Client } from "@notionhq/client";
 
-const NOTION_TOKEN     = process.env.NOTION_TOKEN;
-const DB_ARTICLES      = process.env.NOTION_DB_ARTICLES;   // Articles database ID
-const DB_KEYWORDS      = process.env.NOTION_DB_KEYWORDS;   // Keywords database ID
+const NOTION_TOKEN        = process.env.NOTION_TOKEN;
+const DB_KEYWORDS         = process.env.NOTION_DB_KEYWORDS;
+const DB_ARTICLES         = process.env.NOTION_DB_ARTICLES;
 
-if (!NOTION_TOKEN || !DB_ARTICLES || !DB_KEYWORDS) {
-  console.error("Missing NOTION_TOKEN or DB ids (NOTION_DB_ARTICLES / NOTION_DB_KEYWORDS).");
+if (!NOTION_TOKEN || !DB_KEYWORDS || !DB_ARTICLES) {
+  console.error("Missing env: NOTION_TOKEN, NOTION_DB_KEYWORDS, or NOTION_DB_ARTICLES.");
   process.exit(1);
 }
 
 const notion = new Client({ auth: NOTION_TOKEN });
 
-// --- helpers to find props case-insensitively
-function propKeyByName(properties, names) {
-  const keys = Object.keys(properties || {});
-  const wanted = names.map(n => n.toLowerCase());
-  return keys.find(k => wanted.includes(k.toLowerCase()));
+/* ---------- Helpers ---------- */
+function titlePlain(title) {
+  if (!Array.isArray(title)) return "";
+  return title.map(t => t.plain_text || t.text?.content || "").join("");
 }
 
-function textFrom(prop) {
-  if (!prop) return "";
-  if (prop.type === "title")     return (prop.title || []).map(t => t.plain_text).join("");
-  if (prop.type === "rich_text") return (prop.rich_text || []).map(t => t.plain_text).join("");
-  return "";
+function firstTitleKey(props) {
+  return Object.keys(props || {}).find(k => props[k]?.type === "title") || null;
 }
 
-// fetch all pages in a DB (simple pagination)
-async function fetchAll(dbId) {
-  const out = [];
-  let cursor;
-  do {
-    const res = await notion.databases.query({ database_id: dbId, start_cursor: cursor });
-    out.push(...res.results);
-    cursor = res.has_more ? res.next_cursor : undefined;
-  } while (cursor);
-  return out;
+// Find a property by candidate names + allowed types (case-insensitive)
+function findPropName(props, candidates, allowedTypes) {
+  const keys = Object.keys(props || {});
+  for (const k of keys) {
+    const def = props[k];
+    if (!def) continue;
+    const nameMatch = candidates.some(c => c.toLowerCase() === k.toLowerCase());
+    const typeMatch = allowedTypes ? allowedTypes.includes(def.type) : true;
+    if (nameMatch && typeMatch) return k;
+  }
+  return null;
 }
 
-async function main() {
-  // 1) Get unused keyword
-  const allKw = await fetchAll(DB_KEYWORDS);
+// Looser search: try contains (for things like "Published Date" etc)
+function findPropNameLoose(props, needles, allowedTypes) {
+  const keys = Object.keys(props || {});
+  for (const k of keys) {
+    const def = props[k];
+    if (!def) continue;
+    const nameLower = k.toLowerCase();
+    const nameMatch = needles.some(n => nameLower.includes(n.toLowerCase()));
+    const typeMatch = allowedTypes ? allowedTypes.includes(def.type) : true;
+    if (nameMatch && typeMatch) return k;
+  }
+  return null;
+}
 
-  // try to detect "Used" checkbox prop name
-  const sampleProps = allKw[0]?.properties || {};
-  const usedKey = propKeyByName(sampleProps, ["Used","used","Is Used","is_used"]);
-  const titleKey = propKeyByName(sampleProps, ["Title","Keyword","Name"]);
-  const descKey  = propKeyByName(sampleProps, ["Description","Desc","Notes"]);
+/* ---------- Get one unused keyword ---------- */
+async function getOneUnusedKeyword() {
+  // Detect the "Used" checkbox in the Keywords DB (optional)
+  const kwDb = await notion.databases.retrieve({ database_id: DB_KEYWORDS });
+  const kwProps = kwDb.properties || {};
+  const kwTitleKey = firstTitleKey(kwProps);
 
-  const candidates = allKw.filter(p => {
-    if (!titleKey) return false;
-    const used = usedKey ? (p.properties[usedKey]?.checkbox === true) : false;
-    const title = textFrom(p.properties[titleKey]).trim();
-    return !used && !!title;
-  });
-
-  if (!candidates.length) {
-    console.log("No unused keywords found. Nothing to seed today.");
-    return;
+  if (!kwTitleKey) {
+    throw new Error("Keywords DB has no title property.");
   }
 
-  const kw = candidates[0];
-  const kwTitle = textFrom(kw.properties[titleKey]).trim();
-  const kwDesc  = descKey ? textFrom(kw.properties[descKey]).trim() : "";
+  const usedKey =
+    findPropName(kwProps, ["Used", "Is Used", "is_used", "used"], ["checkbox"]) ||
+    findPropNameLoose(kwProps, ["used"], ["checkbox"]);
 
-  // 2) Create an Article page (Published)
-  // We must map properties generically: Title, Description/Intro/Summary, Published/Status
-  // We'll create the minimal properties safely; Notion will accept unknown props.
-  const articleProps = {};
+  // Query: prefer unused (if checkbox exists), otherwise just take first row
+  let query = { database_id: DB_KEYWORDS, page_size: 10 };
+  if (usedKey) {
+    query.filter = {
+      property: usedKey,
+      checkbox: { equals: false }
+    };
+  }
 
-  // Title (required)
-  articleProps[titleKey || "Title"] = {
-    title: [{ type: "text", text: { content: kwTitle } }]
+  const res = await notion.databases.query(query);
+  const rows = res.results || [];
+  if (!rows.length) return { page: null, kwTitleKey, usedKey };
+
+  const page = rows[0];
+  const title = titlePlain(page.properties[kwTitleKey]?.title || []);
+  return { page, title, kwTitleKey, usedKey };
+}
+
+/* ---------- Create Article row ---------- */
+async function createArticleFromKeyword(keywordTitle) {
+  const db = await notion.databases.retrieve({ database_id: DB_ARTICLES });
+  const props = db.properties || {};
+
+  // Detect your Articles DB property names
+  const titleKey = firstTitleKey(props);
+  if (!titleKey) throw new Error("Articles DB has no title property.");
+
+  const descKey =
+    findPropName(props, ["Description", "Intro", "Summary", "Desc", "Blurb"], ["rich_text", "title"]) ||
+    findPropNameLoose(props, ["desc", "intro", "summary", "blurb"], ["rich_text", "title"]);
+
+  // Either we have a checkbox or a select for Published/Status
+  const publishedCheckboxKey =
+    findPropName(props, ["Published", "Is Published", "is_published"], ["checkbox"]) ||
+    findPropNameLoose(props, ["published"], ["checkbox"]);
+
+  const statusSelectKey =
+    findPropName(props, ["Status"], ["select"]) ||
+    findPropNameLoose(props, ["status"], ["select"]);
+
+  const dateKey =
+    findPropName(props, ["Published At", "Date", "Published Date"], ["date"]) ||
+    findPropNameLoose(props, ["date", "published"], ["date"]);
+
+  // Show mapping we detected
+  console.log("Articles DB mapping:");
+  console.log("  titleKey     :", titleKey);
+  console.log("  descKey      :", descKey || "(none)");
+  console.log("  checkbox Pub :", publishedCheckboxKey || "(none)");
+  console.log("  select Status:", statusSelectKey || "(none)");
+  console.log("  dateKey      :", dateKey || "(none)");
+
+  // Build properties payload
+  const todayISO = new Date().toISOString().split("T")[0];
+  const properties = {};
+
+  properties[titleKey] = {
+    title: [{ text: { content: keywordTitle || "New Article" } }]
   };
 
-  // Description (optional)
-  const articleDescKey = "Description";
-  articleProps[articleDescKey] = {
-    rich_text: [{ type: "text", text: { content: kwDesc || `Guide: ${kwTitle}` } }]
-  };
+  if (descKey) {
+    properties[descKey] = {
+      [props[descKey].type === "title" ? "title" : "rich_text"]: [
+        { text: { content: `Getting started with ${keywordTitle}.` } }
+      ]
+    };
+  }
 
-  // Published (checkbox) — common pattern in your setup
-  articleProps["Published"] = { checkbox: true };
+  if (publishedCheckboxKey) {
+    properties[publishedCheckboxKey] = { checkbox: true };
+  } else if (statusSelectKey) {
+    // Try to set "Published" option if it exists; otherwise use the first option
+    const options = props[statusSelectKey]?.select?.options || [];
+    const publishedOpt = options.find(o => /published/i.test(o.name)) || options[0];
+    if (publishedOpt) {
+      properties[statusSelectKey] = { select: { name: publishedOpt.name } };
+    }
+  }
 
-  // Date (optional)
-  articleProps["Published At"] = { date: { start: new Date().toISOString() } };
+  if (dateKey) {
+    properties[dateKey] = { date: { start: todayISO } };
+  }
 
-  // Create page in Articles DB
+  // Create the new page
   const created = await notion.pages.create({
     parent: { database_id: DB_ARTICLES },
-    properties: articleProps
+    properties
   });
 
-  console.log("Created article page:", created.id, kwTitle);
+  return created;
+}
 
-  // 3) Mark keyword as Used = true
-  if (usedKey) {
+/* ---------- Mark keyword as used (optional) ---------- */
+async function markKeywordUsed(page, usedKey) {
+  if (!page || !usedKey) return;
+  const pageId = page.id;
+  try {
     await notion.pages.update({
-      page_id: kw.id,
+      page_id: pageId,
       properties: { [usedKey]: { checkbox: true } }
     });
-    console.log("Marked keyword as used.");
-  } else {
-    console.log("No 'Used' checkbox property found in Keywords DB; skipping mark.");
+  } catch (e) {
+    console.warn("Could not mark keyword as used:", e.message || e);
   }
 }
 
-main().catch(err => { console.error(err); process.exit(1); });
+/* ---------- Main ---------- */
+(async () => {
+  try {
+    const { page: kwPage, title, kwTitleKey, usedKey } = await getOneUnusedKeyword();
+
+    if (!kwPage) {
+      console.log("No unused keywords found (or Keywords DB is empty). Nothing to seed.");
+      return;
+    }
+
+    const keyword = title || "New Article";
+    console.log("Seeding article for keyword:", `"${keyword}"`);
+
+    const created = await createArticleFromKeyword(keyword);
+    console.log("Created article page:", created.id);
+
+    await markKeywordUsed(kwPage, usedKey);
+    console.log("Done.");
+  } catch (err) {
+    console.error("@notionhq/client warn: request fail {");
+    console.error("  code:", err.code || "(unknown)");
+    console.error("  message:", err.message || String(err));
+    console.error("}");
+    process.exit(1);
+  }
+})();
