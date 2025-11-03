@@ -213,7 +213,7 @@ async function fetchAll(dbId) {
   return out;
 }
 
-/* ========= Simple related selection ========= */
+/* ========= Similarity helpers ========= */
 const STOP = new Set(["the","a","an","for","and","to","of","in","on","with","how","best","guide"]);
 function tokens(s) {
   return (s||"").toLowerCase().split(/[^a-z0-9]+/).filter(w => w && !STOP.has(w));
@@ -247,6 +247,23 @@ function affiliateURL(name, raw) {
   return raw;
 }
 
+/* ========= Safe AI wrapper ========= */
+async function getAIContentSafe(title) {
+  try {
+    const res = await Promise.resolve(generateGuideContent(title));
+    if (!res || typeof res !== "object") {
+      return { html: "", faqItems: [], howtoSteps: [] };
+    }
+    const html = typeof res.html === "string" ? res.html : "";
+    const faqItems = Array.isArray(res.faqItems) ? res.faqItems.filter(x => x && x.q && x.a) : [];
+    const howtoSteps = Array.isArray(res.howtoSteps) ? res.howtoSteps.filter(x => x && x.name && x.text) : [];
+    return { html, faqItems, howtoSteps };
+  } catch (e) {
+    console.warn(`[AI] Failed to generate for "${title}":`, e?.message || e);
+    return { html: "", faqItems: [], howtoSteps: [] };
+  }
+}
+
 /* ========= MAIN ========= */
 async function main() {
   // assets
@@ -262,6 +279,7 @@ async function main() {
   // PRODUCTS
   const productsMap = {};
   if (DB_PRODUCTS) {
+    console.log("[Notion] Fetching products…");
     const products = await fetchAll(DB_PRODUCTS);
     for (const p of products) {
       const pr = p.properties || {};
@@ -273,34 +291,38 @@ async function main() {
       const desc  = textFrom(getByNameCI(pr, ["description","blurb","summary"], ["rich_text","title"]));
       productsMap[p.id] = { name, img, link, brand, price, desc };
     }
+    console.log(`[Notion] Products loaded: ${products.length}`);
   }
 
   // FIRST PASS — collect published meta
+  console.log("[Notion] Fetching articles…");
   const pagesAll = await fetchAll(DB_ARTICLES);
   const pagesPub = [];
   for (const page of pagesAll) {
     const props = page.properties || {};
     if (!isPublished(props)) continue;
-    const title = firstTitle(props);
-    const slug  = slugFrom(props);
+    const title = firstTitle(props) || "(Untitled)";
+    const slug  = slugFrom(props) || "untitled";
     const desc  = textFrom(getByNameCI(props, ["description","intro","summary","Description"], ["rich_text","title"]));
     const dateVal = dateFrom(props);
     const dateStr = dateVal ? dateVal.toLocaleDateString(undefined, {year:"numeric",month:"short",day:"2-digit"}) : "";
     const rel  = getByNameCI(props, ["products","Products"], ["relation"]);
-    const ids  = relIds(rel);
+    const ids  = relIds(rel) || [];
     pagesPub.push({ id: page.id, title, slug, desc, dateVal, dateStr, productIds: ids });
   }
+  console.log(`[Notion] Published articles found: ${pagesPub.length}`);
 
   // Sort newest first for index later
   const publishedSorted = pagesPub.slice().sort((a,b)=> (b.dateVal?.getTime()||0) - (a.dateVal?.getTime()||0));
 
   // SECOND PASS — write each article with Related + schema
   for (const meta of pagesPub) {
-    const { title, slug, desc, dateVal, dateStr, productIds } = meta;
+    const { title, slug, desc, dateVal, dateStr, productIds = [] } = meta;
+    console.log(`[Build] Generating /articles/${slug}.html`);
 
     // Product cards
     let cards = "";
-    if (productIds.length) {
+    if (Array.isArray(productIds) && productIds.length) {
       const cardHTML = productIds.map(id => {
         const pr = productsMap[id] || {};
         const name = pr.name || "Product";
@@ -330,10 +352,10 @@ async function main() {
     }
 
     // AI content (+ structured data parts)
-    const ai = generateGuideContent(title);
-    const guideHTML = ai.html;
+    const ai = await getAIContentSafe(title);
+    const guideHTML = ai.html || "";
 
-    // Related Guides (by simple title similarity; fallback to newest others)
+    // Related Guides
     const others = pagesPub.filter(p => p.slug !== slug);
     let related = others
       .map(p => ({ ...p, sim: similarity(title, p.title) }))
@@ -357,7 +379,7 @@ async function main() {
     // Build JSON-LD (Article + FAQPage + HowTo)
     const articleUrl = `${SITE_URL}/articles/${slug}.html`;
     const ogImage =
-      (productIds.length && productsMap[productIds[0]]?.img)
+      (Array.isArray(productIds) && productIds.length && productsMap[productIds[0]]?.img)
         ? productsMap[productIds[0]].img
         : `${SITE_URL}/assets/img/og-default.jpg`;
 
@@ -367,11 +389,11 @@ async function main() {
       "headline": title,
       "description": desc || "",
       "mainEntityOfPage": articleUrl,
-      "datePublished": dateVal ? dateVal.toISOString() : undefined,
+      ...(dateVal ? { "datePublished": dateVal.toISOString() } : {}),
       "publisher": { "@type":"Organization", "name": SITE_NAME }
     };
 
-    const faqLD = ai.faqItems?.length ? {
+    const faqLD = (ai.faqItems && ai.faqItems.length) ? {
       "@context": "https://schema.org",
       "@type": "FAQPage",
       "mainEntity": ai.faqItems.map(f => ({
@@ -381,7 +403,7 @@ async function main() {
       }))
     } : null;
 
-    const howtoLD = ai.howtoSteps?.length ? {
+    const howtoLD = (ai.howtoSteps && ai.howtoSteps.length) ? {
       "@context": "https://schema.org",
       "@type": "HowTo",
       "name": title,
@@ -486,8 +508,7 @@ async function main() {
   await write("privacy.html",    legal("Privacy Policy", `<p>We use Google Analytics to improve our content.</p>`));
   await write("terms.html",      legal("Terms of Use", `<p>All content is for informational purposes only.</p>`));
 
-  // === IndexNow key file at site root (optional; enables Bing/IndexNow ping auth)
-  // If you set the repo secret INDEXNOW_KEY, this writes /<INDEXNOW_KEY>.txt with the key as its contents.
+  // IndexNow key file at site root (optional)
   if (process.env.INDEXNOW_KEY) {
     await write(`${process.env.INDEXNOW_KEY}.txt`, process.env.INDEXNOW_KEY + "\n");
   }
