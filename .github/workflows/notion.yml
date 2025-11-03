@@ -27,6 +27,7 @@ jobs:
       NOTION_DB_PRODUCTS:     ${{ secrets.NOTION_DB_PRODUCTS }}
       NOTION_DB_KEYWORDS:     ${{ secrets.NOTION_DB_KEYWORDS }}
       BREVO_FORM_URL:         ${{ secrets.BREVO_FORM_URL }}
+      INDEXNOW_KEY:           ${{ secrets.INDEXNOW_KEY }}      # (optional) for Bing/IndexNow ping
 
     steps:
       - name: Checkout
@@ -40,13 +41,18 @@ jobs:
           find . -maxdepth 4 -type f | sort
 
       - name: Setup Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - name: Install deps
         run: npm ci || npm i
 
+      # === NEW: Seed exactly 1 article from the Notion Keywords DB ===
+      - name: Seed daily article from Notion Keywords
+        run: node scripts/seedFromKeywords.js
+
+      # (Keep your existing placeholder injection for GA4/SKIM/etc)
       - name: Inject environment variables
         shell: bash
         run: |
@@ -58,7 +64,7 @@ jobs:
           find . -type f -name "*.html" -exec sed -i "s/{{TITLE}}/${SITE_NAME}/g" {} +
 
           # Description may contain URLs/punctuation → use | delimiter so slashes don't break sed.
-          # If SITE_DESC isn't set, this will replace {{DESC}} with empty (that's fine).
+          # If SITE_DESC isn't set, this replaces {{DESC}} with empty (that's fine).
           find . -type f -name "*.html" -exec sed -i "s|{{DESC}}|${SITE_DESC}|g" {} +
 
           # Optional: uncomment if you have these placeholders in your templates
@@ -73,5 +79,21 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add .
-          git diff --quiet && git diff --staged --quiet || git commit -m "chore: update static site from Notion"
+          git diff --quiet && git diff --staged --quiet || git commit -m "chore: daily Notion sync + AI content"
           git push
+
+      # === Search engine pings ===
+      - name: Ping Google sitemap
+        run: |
+          echo "Pinging Google sitemap..."
+          curl -s "https://www.google.com/ping?sitemap=${SITE_URL}/sitemap.xml" || true
+
+      - name: Ping IndexNow (Bing, etc.)
+        if: env.INDEXNOW_KEY != ''
+        shell: bash
+        run: |
+          echo "Pinging IndexNow..."
+          HOST=$(echo "${SITE_URL}" | sed -E 's#https?://##; s#/.*##')
+          curl -s -X POST "https://api.indexnow.org/indexnow" \
+            -H "Content-Type: application/json" \
+            -d "{\"host\":\"${HOST}\",\"key\":\"${INDEXNOW_KEY}\",\"urlList\":[\"${SITE_URL}/\",\"${SITE_URL}/sitemap.xml\"]}" || true
