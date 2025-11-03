@@ -1,40 +1,100 @@
 name: Notion to Static
+
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 9 * * *'
   push:
     branches: [ main ]
+  schedule:
+    - cron: '0 9 * * *'   # daily 09:00 UTC
+  workflow_dispatch:
+
 jobs:
-  build:
+  # -------------------------------------------
+  # 1) Optional seeding job (never blocks build)
+  #    - Auto-detects your Notion property names
+  #    - Skips on push; runs on schedule/manual
+  # -------------------------------------------
+  seed:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
-    permissions: { contents: write }
+    continue-on-error: true
+    env:
+      NOTION_TOKEN:         ${{ secrets.NOTION_TOKEN }}
+      NOTION_DB_KEYWORDS:   ${{ secrets.NOTION_DB_KEYWORDS }}
+      NOTION_DB_ARTICLES:   ${{ secrets.NOTION_DB_ARTICLES }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '20' }
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - name: Install deps
         run: npm ci || npm i
+
+      - name: Seed daily article from Notion Keywords
+        run: node scripts/seedFromKeywords.js
+
+  # -------------------------------------------
+  # 2) Build static site from Notion
+  # -------------------------------------------
+  build:
+    # build should always run (even if seed hiccups)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    env:
+      SITE_NAME:              ${{ secrets.SITE_NAME }}
+      SITE_URL:               ${{ secrets.SITE_URL }}
+      SITE_DESC:              ${{ secrets.SITE_DESC }}
+      SKIMLINKS_PUB_ID:       ${{ secrets.SKIMLINKS_PUB_ID }}
+      GA4_MEASUREMENT_ID:     ${{ secrets.GA4_MEASUREMENT_ID }}
+      AMAZON_TRACKING_ID:     ${{ secrets.AMAZON_TRACKING_ID }}
+      NOTION_TOKEN:           ${{ secrets.NOTION_TOKEN }}
+      NOTION_DB_ARTICLES:     ${{ secrets.NOTION_DB_ARTICLES }}
+      NOTION_DB_PRODUCTS:     ${{ secrets.NOTION_DB_PRODUCTS }}
+      NOTION_DB_KEYWORDS:     ${{ secrets.NOTION_DB_KEYWORDS }}
+      BREVO_FORM_URL:         ${{ secrets.BREVO_FORM_URL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show repo tree
+        run: |
+          pwd
+          ls -la
+          echo "----"
+          find . -maxdepth 4 -type f | sort
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: npm ci || npm i
+
+      - name: Inject environment variables into templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          # GA4 + Skimlinks + Title (safe with / delimiter)
+          find . -type f -name "*.html" -exec sed -i "s/{{GA4}}/${GA4_MEASUREMENT_ID}/g" {} +
+          find . -type f -name "*.html" -exec sed -i "s/{{SKIM}}/${SKIMLINKS_PUB_ID}/g" {} +
+          find . -type f -name "*.html" -exec sed -i "s/{{TITLE}}/${SITE_NAME}/g" {} +
+          # Description often has slashes → use | delimiter
+          find . -type f -name "*.html" -exec sed -i "s|{{DESC}}|${SITE_DESC}|g" {} +
+
       - name: Build static site from Notion
-        env:
-          SITE_NAME: ${{ secrets.SITE_NAME }}
-          SITE_URL: ${{ secrets.SITE_URL }}
-          SKIMLINKS_PUB_ID: ${{ secrets.SKIMLINKS_PUB_ID }}
-          GA4_MEASUREMENT_ID: ${{ secrets.GA4_MEASUREMENT_ID }}
-          AMAZON_TRACKING_ID: ${{ secrets.AMAZON_TRACKING_ID }}
-          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_DB_ARTICLES: ${{ secrets.NOTION_DB_ARTICLES }}
-          NOTION_DB_PRODUCTS: ${{ secrets.NOTION_DB_PRODUCTS }}
-          NOTION_DB_KEYWORDS: ${{ secrets.NOTION_DB_KEYWORDS }}
         run: npm run build
+
       - name: Commit generated files
         run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add -A
-          if ! git diff --cached --quiet; then
-            git commit -m 'chore: update static site from Notion'
-            git push
-          else
-            echo 'No changes'
-          fi
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git diff --quiet && git diff --staged --quiet || git commit -m "chore: update static site from Notion"
+          git push
