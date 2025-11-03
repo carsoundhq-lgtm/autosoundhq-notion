@@ -143,6 +143,7 @@ function pageLayout({ title, desc, body, jsonld = "", og = {} }) {
       .replace(/{{OG_DESC}}/g, ogDefaults.desc)
       .replace(/{{OG_URL}}/g, ogDefaults.url)
       .replace(/{{OG_IMAGE}}/g, ogDefaults.image)
+      .replace("{{{JSONLD}}}", jsonld) // tolerate triple braces too
       .replace("{{JSONLD}}", jsonld)
     + read("nav.html", NAV)
     + body
@@ -297,7 +298,7 @@ async function main() {
   // FIRST PASS — collect published meta
   console.log("[Notion] Fetching articles…");
   const pagesAll = await fetchAll(DB_ARTICLES);
-  const pagesPub = [];
+  const pagesPubRaw = [];
   for (const page of pagesAll) {
     const props = page.properties || {};
     if (!isPublished(props)) continue;
@@ -308,9 +309,24 @@ async function main() {
     const dateStr = dateVal ? dateVal.toLocaleDateString(undefined, {year:"numeric",month:"short",day:"2-digit"}) : "";
     const rel  = getByNameCI(props, ["products","Products"], ["relation"]);
     const ids  = relIds(rel) || [];
-    pagesPub.push({ id: page.id, title, slug, desc, dateVal, dateStr, productIds: ids });
+    pagesPubRaw.push({ id: page.id, title, slug, desc, dateVal, dateStr, productIds: ids });
   }
-  console.log(`[Notion] Published articles found: ${pagesPub.length}`);
+
+  // DE-DUPLICATE BY SLUG — keep newest (by datePublished or Notion internal created time fallback)
+  const bySlug = new Map();
+  for (const p of pagesPubRaw) {
+    const key = p.slug || p.title.toLowerCase();
+    const prev = bySlug.get(key);
+    if (!prev) {
+      bySlug.set(key, p);
+    } else {
+      const a = p.dateVal?.getTime() || 0;
+      const b = prev.dateVal?.getTime() || 0;
+      if (a >= b) bySlug.set(key, p); // keep newer
+    }
+  }
+  const pagesPub = Array.from(bySlug.values());
+  console.log(`[Notion] Published (unique by slug): ${pagesPub.length}`);
 
   // Sort newest first for index later
   const publishedSorted = pagesPub.slice().sort((a,b)=> (b.dateVal?.getTime()||0) - (a.dateVal?.getTime()||0));
@@ -355,16 +371,18 @@ async function main() {
     const ai = await getAIContentSafe(title);
     const guideHTML = ai.html || "";
 
-    // Related Guides
+    // Related Guides (unique by slug to avoid dupe links)
     const others = pagesPub.filter(p => p.slug !== slug);
     let related = others
       .map(p => ({ ...p, sim: similarity(title, p.title) }))
-      .sort((a,b)=> b.sim - a.sim || ((b.dateVal?.getTime()||0) - (a.dateVal?.getTime()||0)))
-      .slice(0,3);
+      .sort((a,b)=> b.sim - a.sim || ((b.dateVal?.getTime()||0) - (a.dateVal?.getTime()||0)));
 
-    if (!related.length) {
-      related = publishedSorted.filter(p => p.slug !== slug).slice(0,3);
-    }
+    const seen = new Set();
+    related = related.filter(r => {
+      if (seen.has(r.slug)) return false;
+      seen.add(r.slug);
+      return true;
+    }).slice(0,3);
 
     const relatedHTML = related.length ? `
 <section class="related">
@@ -541,7 +559,7 @@ async function main() {
 </channel></rss>`;
   await write("feed.xml", rss);
 
-  console.log(`Published articles: ${publishedSorted.length}`);
+  console.log(`Published articles (unique): ${publishedSorted.length}`);
 }
 
 main().catch(err => { console.error(err); process.exit(1); });
